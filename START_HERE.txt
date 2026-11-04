@@ -1,0 +1,11 @@
+SMARTBIZ POS — QUICK START FOR CURSOR / CLAUDE
+
+1. Open the greenfield project folder in Cursor or Claude Code.
+2. Add SMARTBIZ_POS_CURSOR_CLAUDE_SKILL.md to the agent's project instructions/skills.
+3. Add SmartBiz_POS_Detailed_User_Stories.docx to the project docs (or convert/export it to markdown if your agent cannot read DOCX).
+4. Start with the skill's "Initial task to execute" section. Do not ask the agent to implement every feature in one prompt.
+5. Require the agent to create and verify boilerplate first: workspace, app shells, TypeScript strict config, lint/format, env validation, local DB/migrations, API skeleton, authz, test harness, CI and docs.
+6. Provide exact printer/scanner make and model before asking it to claim device support.
+7. Implement in vertical slices and verify tests after each slice.
+
+Important: This is a greenfield specification. No existing app boilerplate or infrastructure should be assumed.
