@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SmartBiz POS",
+  "version": "0.1.0",
+  "identifier": "com.smartbiz.pos",
+  "build": {
+    "beforeDevCommand": "npm run web --workspace @smartbiz/mobile",
+    "devUrl": "http://localhost:8081",
+    "beforeBuildCommand": "npm run build:web --workspace @smartbiz/mobile",
+    "frontendDist": "../../mobile/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "SmartBiz POS",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 360,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

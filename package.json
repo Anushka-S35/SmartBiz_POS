@@ -1,0 +1,36 @@
+{
+  "name": "smartbiz-pos",
+  "type": "module",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "apps/mobile",
+    "apps/desktop",
+    "packages/core"
+  ],
+  "scripts": {
+    "lint": "eslint apps packages --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "build": "npm run build:web --workspace @smartbiz/mobile"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.10.0",
+    "@types/papaparse": "^5.3.16",
+    "better-sqlite3": "^13.0.3",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
+    "prettier": "^3.6.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.48.0",
+    "vitest": "^4.0.8"
+  }
+}
