@@ -197,7 +197,7 @@ export function Body({
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.background },
-  page: { flexGrow: 1, padding: spacing.md, alignItems: "center" },
+  page: { flexGrow: 1, padding: spacing.lg, alignItems: "center" },
   content: {
     width: "100%",
     maxWidth: 1440,
@@ -205,12 +205,12 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
   heading: { gap: spacing.xs, paddingVertical: spacing.sm },
-  title: { color: colors.ink, fontSize: 23, fontWeight: "700" },
+  title: { color: colors.deepNavy, fontSize: 26, fontWeight: "700" },
   subtitle: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   card: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radii.sm,
+    borderRadius: radii.md,
     borderWidth: 1,
     gap: spacing.md,
     padding: spacing.md,

@@ -39,6 +39,18 @@ pub fn run() {
             sql: include_str!("../../../../packages/core/migrations/0006_fifo_cost_layer_restoration.sql"),
             kind: tauri_plugin_sql::MigrationKind::Up,
         },
+        tauri_plugin_sql::Migration {
+            version: 7,
+            description: "add_indian_gst_foundation",
+            sql: include_str!("../../../../packages/core/migrations/0007_indian_gst_foundation.sql"),
+            kind: tauri_plugin_sql::MigrationKind::Up,
+        },
+        tauri_plugin_sql::Migration {
+            version: 8,
+            description: "gst_purchase_itc",
+            sql: include_str!("../../../../packages/core/migrations/0008_gst_purchase_itc.sql"),
+            kind: tauri_plugin_sql::MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

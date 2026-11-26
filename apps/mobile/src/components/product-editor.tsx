@@ -18,6 +18,9 @@ function emptyProduct(unitId = ""): ProductInput {
     sku: "",
     description: "",
     taxCategory: "",
+    hsnSacCode: "",
+    gstSupplyType: "TAXABLE",
+    gstPricingMode: "EXCLUSIVE",
     categoryId: null,
     unitId,
     purchasePrice: "",
@@ -57,6 +60,9 @@ export function ProductEditor({
         sku: product.sku,
         description: product.description,
         taxCategory: product.taxCategory,
+        hsnSacCode: product.hsnSacCode,
+        gstSupplyType: product.gstSupplyType,
+        gstPricingMode: product.gstPricingMode,
         categoryId: product.categoryId,
         unitId: product.unitId,
         purchasePrice: minorUnitsToDecimal(
@@ -132,6 +138,51 @@ export function ProductEditor({
             value={form.taxCategory}
             onChangeText={(text) => update("taxCategory", text)}
           />
+          <Field
+            label={t("hsnSacCode")}
+            value={form.hsnSacCode ?? ""}
+            onChangeText={(text) =>
+              update("hsnSacCode", text.replace(/\D/g, "").slice(0, 8))
+            }
+            keyboardType="number-pad"
+          />
+          <View style={{ gap: spacing.xs }}>
+            <Heading>{t("gstSupplyClassification")}</Heading>
+            <Choice
+              selected={form.gstSupplyType ?? "TAXABLE"}
+              onSelect={(selected) => {
+                if (
+                  ["TAXABLE", "EXEMPT", "NIL_RATED", "NON_GST"].includes(
+                    selected,
+                  )
+                )
+                  update(
+                    "gstSupplyType",
+                    selected as NonNullable<ProductInput["gstSupplyType"]>,
+                  );
+              }}
+              options={[
+                { value: "TAXABLE", label: t("gstSupplyTaxable") },
+                { value: "EXEMPT", label: t("gstSupplyExempt") },
+                { value: "NIL_RATED", label: t("gstSupplyNilRated") },
+                { value: "NON_GST", label: t("gstSupplyNonGst") },
+              ]}
+            />
+          </View>
+          <View style={{ gap: spacing.xs }}>
+            <Heading>{t("gstPricingMode")}</Heading>
+            <Choice
+              selected={form.gstPricingMode ?? "EXCLUSIVE"}
+              onSelect={(selected) => {
+                if (selected === "INCLUSIVE" || selected === "EXCLUSIVE")
+                  update("gstPricingMode", selected);
+              }}
+              options={[
+                { value: "EXCLUSIVE", label: t("gstPricingExclusive") },
+                { value: "INCLUSIVE", label: t("gstPricingInclusive") },
+              ]}
+            />
+          </View>
           <View style={{ gap: spacing.xs }}>
             <Heading>{t("category")}</Heading>
             <Choice

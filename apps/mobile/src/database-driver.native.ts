@@ -23,10 +23,33 @@ class ExpoSqlDatabase implements SqlDatabase {
     return this.database.getAllAsync<T>(sql, [...params]);
   }
 
+  /**
+   * Executes migration SQL. `PRAGMA user_version = N` statements are extracted
+   * and executed outside the transaction because SQLite silently ignores
+   * header-modifying PRAGMAs when they run inside a transaction (the case on
+   * Android, where `executeScript` runs inside `withExclusiveTransactionAsync`).
+   * Everything else runs inside the transaction for atomicity.
+   */
   async executeScript(sql: string): Promise<void> {
-    await this.database.withExclusiveTransactionAsync(async (transaction) => {
-      await transaction.execAsync(sql);
-    });
+    const pragmaStatements: string[] = [];
+    const sqlWithoutPragma = sql.replace(
+      /PRAGMA\s+user_version\s*=\s*\d+\s*;?/gi,
+      (match) => {
+        pragmaStatements.push(match);
+        return "";
+      },
+    ).trim();
+
+    if (sqlWithoutPragma.length > 0) {
+      await this.database.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.execAsync(sqlWithoutPragma);
+      });
+    }
+
+    // PRAGMA user_version must be set outside the transaction to actually persist.
+    for (const pragma of pragmaStatements) {
+      await this.database.execAsync(pragma);
+    }
   }
 
   async currentMigrationVersion(): Promise<number> {

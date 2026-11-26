@@ -29,7 +29,7 @@ The demo is created interactively in a local app database; no fixed demo credent
 - Add a new numbered migration for schema changes. Never edit an applied migration. Keep the migration bundle and SQL migration aligned, and add an upgrade test.
 - Application services enforce the current in-memory session and role permissions. Do not treat caller-supplied user IDs as sufficient authorization.
 - Stock balance is always `SUM(stock_movements.quantity_delta_scaled)`; do not add a writable stock-balance field. Posted invoices, invoice lines, payments, return rows, tax rates, and stock movements are append-only. Correct them with returns/reversals.
-- Billing uses integer minor units and BigInt-backed rounding. Configured tax rates are tax-exclusive basis points; do not represent this as GST/legal compliance. A tax-enabled sale requires a tax category and an effective rate.
+- Billing uses integer minor units and BigInt-backed rounding. GST-aware sales use configured effective rates, product classification/pricing mode and an explicitly supplied place-of-supply state to snapshot tax components. This is not a GST compliance claim; rules and output still require practitioner review. Purchase ITC and return-preparation reports are not implemented.
 - Invoice posting, returns, and cancellation use SQLite triggers so status changes and their stock/payment effects commit or roll back together. Draft header and item snapshots are also inserted atomically from a validated JSON payload.
 - Inventory, Customers, and Billing routes can be opened from the Overview screen. Service permissions remain authoritative; cashier screens intentionally omit management controls.
 

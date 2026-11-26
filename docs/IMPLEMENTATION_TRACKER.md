@@ -19,7 +19,7 @@ This tracker maps the implementation to every story in `SmartBiz_POS_Detailed_Us
 ## Release 0 — Foundation
 
 - **FOUND-001 — Partial.** Workspace, Expo/Tauri shells, strict TypeScript, env template, lockfile, CI, lint/format/typecheck, tests, and docs exist. macOS Tauri dev and release `.app`/`.dmg` builds work; Android and iOS builds remain unverified. CI is configured to fail on high/critical npm advisories, and currently does fail that security gate because the dependency tree has known high findings.
-- **FOUND-002 — Partial.** Business profile, onboarding state, currency/timezone, invoice prefix, tax toggle, conditional tax-ID validation, SQLite persistence, and update audit events exist. Logo file handling and jurisdiction-specific tax-ID validation are absent; GST jurisdiction is undecided.
+- **FOUND-002 — Partial.** Business profile, onboarding state, currency/timezone, invoice prefix, tax toggle, GST registration type/GSTIN/state/address, SQLite persistence, and update audit events exist. GSTIN validation is local format/checksum only; official record validation and jurisdiction-specific legal decisions remain absent.
 - **FOUND-003 — Partial.** Local user creation, Admin/Manager/Cashier roles, disabled-account checks, permission checks bound to the active authenticated service session, and role/status audit events exist. User invitations and server-side authorization do not exist in this local-only architecture.
 - **FOUND-004 — Partial.** Local sign-in/out, salted PBKDF2 hashes, per-process active-session validation/expiry, and a per-process failed-login cooldown exist. New tests cover valid and invalid credentials and restart persistence. A designed trusted-device/offline sign-in policy and persisted or multi-device sessions are absent.
 
@@ -62,12 +62,12 @@ This tracker maps the implementation to every story in `SmartBiz_POS_Detailed_Us
 
 - **CUST-001 — Partial.** Customer create/edit/search/archive, validated contact fields, and customer selection in billing exist. Walk-in is represented by a null customer on an invoice. UI/E2E coverage and guest-specific reporting remain absent.
 - **CUST-002 — Partial.** Posted/cancelled invoices appear in purchase history; a transaction-derived summary reports posted invoice count, net sales after returned item values, net payments/refunds, and outstanding amount. Cancellation and return effects are covered by integration tests. A dated/exportable customer report and UI/E2E verification are absent.
-- **BILL-001 — Partial.** Product/SKU/barcode search, cart quantity and line discount entry, draft totals, tax snapshots, and walk-in/customer checkout are implemented. Tax-exclusive rates must be explicitly configured by product tax category; jurisdictional rules, full UI/E2E tests, and scanner integration remain absent.
+- **BILL-001 — Partial.** Product/SKU/barcode search, cart quantity and line discount entry, draft totals, customer snapshots, configured GST component calculations, and walk-in/customer checkout are implemented. Place of supply is user-entered; legal place-of-supply rules, broad GST acceptance coverage and scanner integration remain absent.
 - **BILL-002 — Partial.** Draft invoice and snapshots persist atomically; posting is a single SQLite update whose trigger validates totals and inserts stock deductions atomically. Invoice IDs include local date plus UUID for offline uniqueness; cross-device/server numbering and crash/restart E2E verification remain unresolved.
 - **BILL-003 — Partial.** Append-only payment records support cash, UPI, card, bank transfer, credit-labelled tenders, partial payments, due calculation, duplicate-key detection, and overpayment rejection. Gateway settlement/reconciliation and split-payment UI workflows are not verified.
 - **BILL-004 — Partial.** Invoice details render to HTML; native builds generate a PDF for system sharing, and web/Tauri invokes the print dialog. No physical printer model or driver has been tested; platform runtime verification and invoice-format/legal review remain outstanding.
 - **BILL-005 — Partial.** Cancellation appends stock and payment reversals; sales returns are append-only and may restock or quarantine/damage items with an optional refund. Cancellation after a return is blocked to avoid double reversal. Credit-note/legal workflows and comprehensive E2E testing remain absent.
-- **BILL-006 — Partial.** Business tax mode and immutable, effective-dated category rates are available. Arithmetic uses integer minor units and basis points with tax-exclusive rounding; GST jurisdiction, inclusive/exempt rules, invoice legal requirements, and tax-ID validation require owner/legal approval.
+- **BILL-006 — Partial.** Business GST settings, product HSN/SAC and supply/pricing modes, effective rates, CGST/SGST/IGST and cess calculation, new invoice snapshots, and GST-labelled PDFs exist. Statutory validation, legal jurisdiction rules, purchase ITC and GST reporting remain incomplete.
 
 ## Release 5 — Offline, synchronization, and backup
 
@@ -102,7 +102,7 @@ This tracker maps the implementation to every story in `SmartBiz_POS_Detailed_Us
 
 ## Owner decisions
 
-- GST jurisdiction, invoice/tax rules, and business tax-ID validation.
+- Purchase GST/ITC workflows, GST registers/return-preparation exports, reverse charge, and government integrations.
 - Negative-stock policy and who may override it.
 - Cloud/backend provider and whether multi-device sync is required for MVP.
 - Offline invoice-number allocation across devices.

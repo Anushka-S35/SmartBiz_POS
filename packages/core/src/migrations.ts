@@ -2,6 +2,8 @@ import { inventoryCustomersBillingMigration } from "./migration-3";
 import { supplierPurchasingMigration } from "./migration-4";
 import { purchasingFinanceCostMigration } from "./migration-5";
 import { fifoCostLayerRestorationMigration } from "./migration-6";
+import { indianGstFoundationMigration } from "./migration-7";
+import { gstPurchaseItcMigration } from "./migration-8";
 
 export interface Migration {
   version: number;
@@ -388,5 +390,15 @@ PRAGMA user_version = 2;
     version: 6,
     description: "Preserve FIFO layers through returns and cancellations",
     sql: fifoCostLayerRestorationMigration,
+  },
+  {
+    version: 7,
+    description: "Add Indian GST business, document, and tax snapshot fields",
+    sql: indianGstFoundationMigration,
+  },
+  {
+    version: 8,
+    description: "Wire GST purchase tax capture and ITC ledger into purchase receipt trigger",
+    sql: gstPurchaseItcMigration,
   },
 ];

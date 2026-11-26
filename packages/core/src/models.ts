@@ -1,6 +1,13 @@
 export type UserRole = "ADMIN" | "MANAGER" | "CASHIER";
 export type Locale = "en" | "hi" | "mr";
 export type BarcodeSymbology = "CODE128" | "EAN13";
+export type GstRegistrationType =
+  "NOT_CONFIGURED" | "REGULAR" | "COMPOSITION" | "UNREGISTERED";
+export type GstDocumentType =
+  | "TAX_INVOICE"
+  | "BILL_OF_SUPPLY"
+  | "INVOICE_CUM_BILL_OF_SUPPLY"
+  | "RETAIL_RECEIPT";
 
 export interface Actor {
   id: string;
@@ -22,6 +29,13 @@ export interface BusinessProfile {
   invoicePrefix: string;
   taxEnabled: boolean;
   taxRegistrationId: string | null;
+  gstRegistrationType: GstRegistrationType;
+  gstTradeName: string;
+  gstStateCode: string;
+  gstRegisteredAddress: string;
+  gstFinancialYearStartMonth: number;
+  gstInvoicePrefix: string;
+  gstInvoiceFooter: string;
   allowMultipleBarcodes: boolean;
   setupComplete: boolean;
 }
@@ -58,6 +72,9 @@ export interface ProductRecord {
   sku: string;
   description: string;
   taxCategory: string;
+  hsnSacCode: string;
+  gstSupplyType: "TAXABLE" | "EXEMPT" | "NIL_RATED" | "NON_GST";
+  gstPricingMode: "INCLUSIVE" | "EXCLUSIVE";
   categoryId: string | null;
   categoryName: string;
   unitId: string;
@@ -73,12 +90,24 @@ export interface ProductRecord {
   activeBarcodeSymbology: BarcodeSymbology | null;
 }
 
+export interface TaxRateRecord {
+  id: string;
+  categoryCode: string;
+  rateBasisPoints: number;
+  cessRateBasisPoints: number;
+  effectiveAt: string;
+  sourceReference: string;
+  reason: string;
+}
+
 export interface CustomerRecord {
   id: string;
   name: string;
   phone: string;
   email: string;
   address: string;
+  gstin: string;
+  stateCode: string;
   archivedAt: string | null;
 }
 
@@ -92,17 +121,44 @@ export interface SupplierRecord {
   archivedAt: string | null;
 }
 
+export type ItcClassification = "UNASSESSED" | "ELIGIBLE" | "INELIGIBLE" | "BLOCKED";
+export type ItcAdjustmentType = "CLAIM" | "REVERSAL" | "RECLAIM";
+
 export interface PurchaseLineInput {
   productId: string;
   quantity: string;
   unitCost: string;
+  hsnSacCode?: string;
+  gstSupplyType?: "TAXABLE" | "EXEMPT" | "NIL_RATED" | "NON_GST";
+  gstPricingMode?: "INCLUSIVE" | "EXCLUSIVE";
+  gstRateBasisPoints?: number;
+  cessRateBasisPoints?: number;
+  discountMinor?: number;
 }
 
 export interface PurchaseInput {
   supplierId: string;
   referenceNumber: string;
+  supplierInvoiceNumber: string;
+  supplierInvoiceDate: string;
   idempotencyKey: string;
+  reverseCharge?: boolean;
   lines: PurchaseLineInput[];
+}
+
+export interface PurchaseLineGstSnapshot {
+  hsnSacCode: string;
+  gstSupplyType: "TAXABLE" | "EXEMPT" | "NIL_RATED" | "NON_GST";
+  gstPricingMode: "INCLUSIVE" | "EXCLUSIVE";
+  gstRateBasisPoints: number;
+  cessRateBasisPoints: number;
+  taxableValueMinor: number;
+  inputCgstMinor: number;
+  inputSgstMinor: number;
+  inputIgstMinor: number;
+  inputCessMinor: number;
+  inputTaxMinor: number;
+  itcStatus: ItcClassification;
 }
 
 export interface PurchaseRecord {
@@ -110,8 +166,13 @@ export interface PurchaseRecord {
   supplierId: string;
   supplierName: string;
   referenceNumber: string;
+  supplierInvoiceNumber: string;
+  supplierInvoiceDate: string;
+  supplierGstinSnapshot: string;
   status: "RECEIVED";
   totalMinor: number;
+  inputTaxTotalMinor: number;
+  reverseCharge: boolean;
   createdAt: string;
   lines: Array<{
     id: string;
@@ -121,7 +182,97 @@ export interface PurchaseRecord {
     quantityScaled: number;
     unitCostMinor: number;
     lineTotalMinor: number;
+    gst: PurchaseLineGstSnapshot;
   }>;
+}
+
+export interface PurchaseItcAdjustmentRecord {
+  id: string;
+  purchaseId: string;
+  purchaseLineId: string;
+  adjustmentType: ItcAdjustmentType;
+  cgstMinor: number;
+  sgstMinor: number;
+  igstMinor: number;
+  cessMinor: number;
+  reason: string;
+  occurredAt: string;
+  actorName: string;
+}
+
+export type GstRegisterScope = "SALES" | "PURCHASES";
+
+export interface GstRegisterLine {
+  documentNumber: string;
+  documentDate: string;
+  partyGstin: string;
+  partyName: string;
+  hsnSacCode: string;
+  taxableValueMinor: number;
+  cgstMinor: number;
+  sgstMinor: number;
+  igstMinor: number;
+  cessMinor: number;
+  totalTaxMinor: number;
+  totalMinor: number;
+  documentType: string;
+  status: string;
+  reference: string;
+}
+
+export interface GstRegister {
+  scope: GstRegisterScope;
+  from: string;
+  to: string;
+  lines: GstRegisterLine[];
+  totals: {
+    taxableValueMinor: number;
+    cgstMinor: number;
+    sgstMinor: number;
+    igstMinor: number;
+    cessMinor: number;
+    totalTaxMinor: number;
+    totalMinor: number;
+  };
+}
+
+export interface GstTaxSummary {
+  taxHead: "CGST" | "SGST" | "IGST" | "CESS";
+  taxableValueMinor: number;
+  taxMinor: number;
+}
+
+export interface GstItcSummary {
+  classification: ItcClassification;
+  cgstMinor: number;
+  sgstMinor: number;
+  igstMinor: number;
+  cessMinor: number;
+  totalMinor: number;
+  lineCount: number;
+}
+
+export interface GstNetLiabilitySummary {
+  outputCgstMinor: number;
+  outputSgstMinor: number;
+  outputIgstMinor: number;
+  outputCessMinor: number;
+  outputTotalMinor: number;
+  inputCgstMinor: number;
+  inputSgstMinor: number;
+  inputIgstMinor: number;
+  inputCessMinor: number;
+  inputTotalMinor: number;
+  eligibleInputCgstMinor: number;
+  eligibleInputSgstMinor: number;
+  eligibleInputIgstMinor: number;
+  eligibleInputCessMinor: number;
+  eligibleInputTotalMinor: number;
+  netCgstMinor: number;
+  netSgstMinor: number;
+  netIgstMinor: number;
+  netCessMinor: number;
+  netPayableMinor: number;
 }
 
 export type ReportGrouping = "day" | "week" | "month";
@@ -296,6 +447,15 @@ export interface InvoiceLineRecord {
   unitPriceMinor: number;
   discountMinor: number;
   taxRateBasisPoints: number;
+  hsnSacCode: string;
+  gstSupplyType: ProductRecord["gstSupplyType"];
+  gstPricingMode: ProductRecord["gstPricingMode"];
+  taxableValueMinor: number;
+  cgstMinor: number;
+  sgstMinor: number;
+  igstMinor: number;
+  cessRateBasisPoints: number;
+  cessMinor: number;
   subtotalMinor: number;
   taxMinor: number;
   totalMinor: number;
@@ -315,6 +475,18 @@ export interface InvoiceRecord {
   invoiceNumber: string;
   customerId: string | null;
   customerName: string;
+  customerGstinSnapshot: string;
+  customerAddressSnapshot: string;
+  customerStateCodeSnapshot: string;
+  documentType: GstDocumentType;
+  supplierGstinSnapshot: string;
+  supplierLegalNameSnapshot: string;
+  supplierTradeNameSnapshot: string;
+  supplierAddressSnapshot: string;
+  supplierStateCodeSnapshot: string;
+  placeOfSupplyStateCode: string;
+  reverseCharge: boolean;
+  financialYear: string;
   status: "DRAFT" | "POSTED" | "CANCELLED";
   subtotalMinor: number;
   discountMinor: number;

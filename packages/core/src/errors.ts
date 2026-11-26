@@ -6,6 +6,7 @@ export type ErrorCode =
   | "CONFLICT"
   | "SETUP_INCOMPLETE"
   | "UNSUPPORTED_PLATFORM"
+  | "UNSUPPORTED"
   | "PERSISTENCE";
 
 export class AppError extends Error {

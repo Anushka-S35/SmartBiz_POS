@@ -1,23 +1,23 @@
 export const colors = {
-  deepNavy: "#263747",
-  steelBlue: "#405A70",
-  mutedBlue: "#8B9AA6",
-  warmGrey: "#F2F3F2",
-  ink: "#252C33",
-  muted: "#8B9AA6",
-  background: "#F2F3F2",
+  deepNavy: "#172B4D",
+  steelBlue: "#0D9488",
+  mutedBlue: "#64748B",
+  warmGrey: "#F8FAFC",
+  ink: "#334155",
+  muted: "#64748B",
+  background: "#F8FAFC",
   surface: "#FFFFFF",
-  primary: "#263747",
-  primaryPressed: "#405A70",
-  border: "#E1E5E5",
-  danger: "#C45151",
-  dangerBackground: "#FBEFEF",
-  success: "#27845A",
-  warning: "#C18A35",
-  information: "#3975A8",
-  chip: "#F2F3F2",
-  focus: "#3975A8",
-  overlay: "rgba(38, 55, 71, 0.32)",
+  primary: "#172B4D",
+  primaryPressed: "#0D9488",
+  border: "#E2E8F0",
+  danger: "#DC2626",
+  dangerBackground: "#FEF2F2",
+  success: "#16A34A",
+  warning: "#D97706",
+  information: "#2563EB",
+  chip: "#F1F5F9",
+  focus: "#0D9488",
+  overlay: "rgba(23, 43, 77, 0.32)",
 };
 
 export const spacing = {
@@ -33,4 +33,11 @@ export const radii = {
   sm: 6,
   md: 10,
   lg: 14,
+};
+
+export const typography = {
+  title: 26,
+  heading: 18,
+  body: 15,
+  caption: 13,
 };

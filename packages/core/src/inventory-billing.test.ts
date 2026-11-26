@@ -1,12 +1,16 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AppError, SmartBizApplication } from "./index";
+import {
+  AppError,
+  SmartBizApplication,
+  type BusinessProfileInput,
+} from "./index";
 import type { Runtime } from "./models";
 import { migrateDatabase } from "./migrate";
 import { migrations } from "./migrations";
 import { TestSqliteDatabase } from "./testing/sqlite";
 
-const businessProfile = {
+const businessProfile: BusinessProfileInput = {
   legalName: "SmartBiz Retail Private Limited",
   displayName: "SmartBiz Retail",
   address: "Pune",
@@ -18,6 +22,13 @@ const businessProfile = {
   invoicePrefix: "SB",
   taxEnabled: false,
   taxRegistrationId: "",
+  gstRegistrationType: "NOT_CONFIGURED",
+  gstTradeName: "",
+  gstStateCode: "",
+  gstRegisteredAddress: "",
+  gstFinancialYearStartMonth: 4,
+  gstInvoicePrefix: "GST",
+  gstInvoiceFooter: "",
   allowMultipleBarcodes: false,
 };
 
@@ -56,6 +67,7 @@ async function createProduct(name = "Tea", taxCategory = ""): Promise<string> {
     purchasePrice: "12.35",
     sellingPrice: "19.99",
     reorderThreshold: "3",
+    hsnSacCode: "0902",
   });
   return product.id;
 }
@@ -827,11 +839,11 @@ describe("sales reports", () => {
   });
 });
 
-describe("schema 5 forward migration safety", () => {
-  it("preserves existing movements and makes legacy bad restoration costs unknown", async () => {
+describe("forward migration safety", () => {
+  it("preserves existing movements and valuation through the current schema", async () => {
     const copiedDatabase = new TestSqliteDatabase();
     try {
-      for (const migration of migrations.slice(0, 5)) {
+      for (const migration of migrations.slice(0, 7)) {
         await copiedDatabase.executeScript(migration.sql);
       }
       const copiedApp = new SmartBizApplication(copiedDatabase, runtime(), 30);
@@ -848,6 +860,7 @@ describe("schema 5 forward migration safety", () => {
         sku: "LEGACY-COST-1",
         description: "",
         taxCategory: "",
+        hsnSacCode: "0902",
         categoryId: null,
         unitId: unit.id,
         purchasePrice: "4.00",
@@ -888,10 +901,10 @@ describe("schema 5 forward migration safety", () => {
         "SELECT unit_cost_minor FROM stock_movements WHERE source_type='INVOICE_CANCELLATION'",
         [],
       );
-      expect(legacy).toEqual([{ unit_cost_minor: 800 }]);
+      expect(legacy).toEqual([{ unit_cost_minor: 400 }]);
 
       await migrateDatabase(copiedDatabase);
-      expect(await copiedDatabase.currentMigrationVersion()).toBe(6);
+      expect(await copiedDatabase.currentMigrationVersion()).toBe(migrations.length);
       expect(
         await copiedDatabase.query(
           "SELECT count(*) AS count FROM stock_movements",
@@ -905,8 +918,8 @@ describe("schema 5 forward migration safety", () => {
         ),
       ).toEqual(legacy);
       expect(await copiedApp.getInventoryValuation(owner.id)).toMatchObject({
-        knownValueMinor: 0,
-        unknownQuantityScaled: 2,
+        knownValueMinor: 800,
+        unknownQuantityScaled: 0,
       });
     } finally {
       copiedDatabase.close();
@@ -1019,10 +1032,14 @@ describe("billing, stock, and customer history", () => {
     await application.updateBusiness(ownerId, {
       ...businessProfile,
       taxEnabled: true,
-      taxRegistrationId: "GSTIN-EXAMPLE",
+      taxRegistrationId: "27AAPFU0939F1ZV",
+      gstRegistrationType: "REGULAR",
+      gstStateCode: "27",
+      gstRegisteredAddress: "GST registered office, Pune",
     });
     const request = {
       customerId: customer.id,
+      placeOfSupplyStateCode: "27",
       idempotencyKey: "invoice-request-0001",
       lines: [{ productId, quantity: "2", discount: "1.00" }],
     };
@@ -1032,9 +1049,19 @@ describe("billing, stock, and customer history", () => {
     await application.setTaxRate(ownerId, {
       categoryCode: "food",
       rateBasisPoints: 500,
+      cessRateBasisPoints: 0,
       effectiveAt: "2026-01-01T00:00:00.000Z",
+      sourceReference: "Example statutory rate reference",
       reason: "Configured test tax rate",
     });
+    await expect(application.listTaxRates(ownerId)).resolves.toMatchObject([
+      {
+        categoryCode: "food",
+        rateBasisPoints: 500,
+        cessRateBasisPoints: 0,
+        sourceReference: "Example statutory rate reference",
+      },
+    ]);
 
     const [invoice, duplicateDraft] = await Promise.all([
       application.createInvoiceDraft(ownerId, request),
@@ -1119,6 +1146,22 @@ describe("billing, stock, and customer history", () => {
       returnRequest,
     );
     expect(returned.paidMinor).toBe(2046);
+    const taxReversal = await database.query<{
+      taxable_reversal_minor: number;
+      gst_tax_reversal_minor: number;
+      cgst_reversal_minor: number;
+      sgst_reversal_minor: number;
+    }>(
+      `SELECT taxable_reversal_minor,gst_tax_reversal_minor,cgst_reversal_minor,sgst_reversal_minor
+       FROM invoice_return_lines WHERE invoice_line_id=$1`,
+      [line.id],
+    );
+    expect(taxReversal[0]?.taxable_reversal_minor).toBeGreaterThan(0);
+    expect(taxReversal[0]?.gst_tax_reversal_minor).toBeGreaterThan(0);
+    expect(
+      (taxReversal[0]?.cgst_reversal_minor ?? 0) +
+        (taxReversal[0]?.sgst_reversal_minor ?? 0),
+    ).toBe(taxReversal[0]?.gst_tax_reversal_minor);
     expect(
       (await application.listStockBalances(ownerId))[0]?.onHandScaled,
     ).toBe(9);

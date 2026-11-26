@@ -9,6 +9,7 @@ import {
   generateInternalBarcode,
   hasPermission,
   migrateDatabase,
+  type BusinessProfileInput,
   type Migration,
   parseMoneyToMinorUnits,
   parseQuantityToScaledInteger,
@@ -18,7 +19,7 @@ import type { Runtime } from "./models";
 import { migrations } from "./migrations";
 import { TestSqliteDatabase } from "./testing/sqlite";
 
-const businessProfile = {
+const businessProfile: BusinessProfileInput = {
   legalName: "SmartBiz Retail Private Limited",
   displayName: "SmartBiz Retail",
   address: "Pune",
@@ -30,6 +31,13 @@ const businessProfile = {
   invoicePrefix: "SB",
   taxEnabled: false,
   taxRegistrationId: "",
+  gstRegistrationType: "NOT_CONFIGURED",
+  gstTradeName: "",
+  gstStateCode: "",
+  gstRegisteredAddress: "",
+  gstFinancialYearStartMonth: 4,
+  gstInvoicePrefix: "GST",
+  gstInvoiceFooter: "",
   allowMultipleBarcodes: false,
 };
 
@@ -138,7 +146,7 @@ describe("exact money and quantity values", () => {
 
       await migrateDatabase(upgradeDatabase);
 
-      expect(await upgradeDatabase.currentMigrationVersion()).toBe(6);
+      expect(await upgradeDatabase.currentMigrationVersion()).toBe(8);
       const indexes = await upgradeDatabase.query<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = $1",
         ["idx_businesses_single_installation"],
@@ -157,6 +165,15 @@ describe("exact money and quantity values", () => {
           ),
           "utf8",
         ),
+      );
+      expect(migrations[6]?.sql.trim()).toBe(
+        readFileSync(
+          resolve(
+            process.cwd(),
+            "packages/core/migrations/0007_indian_gst_foundation.sql",
+          ),
+          "utf8",
+        ).trim(),
       );
     } finally {
       upgradeDatabase.close();
@@ -181,6 +198,7 @@ describe("exact money and quantity values", () => {
     expect(desktop).toContain(
       '.add_migrations("sqlite:smartbiz.db", migrations)',
     );
+    expect(desktop).toContain("0007_indian_gst_foundation.sql");
     expect(configuration).toContain('"identifier": "com.smartbiz.pos"');
   });
 
@@ -344,6 +362,9 @@ describe("business and catalogue application services", () => {
       sku: "TEA-01",
       description: "Loose tea",
       taxCategory: "",
+      hsnSacCode: "09012100",
+      gstSupplyType: "TAXABLE",
+      gstPricingMode: "INCLUSIVE",
       categoryId: category.id,
       unitId: piece.id,
       purchasePrice: "25.50",
@@ -353,6 +374,11 @@ describe("business and catalogue application services", () => {
 
     expect(product.purchasePriceMinor).toBe(2550);
     expect(product.sellingPriceMinor).toBe(4000);
+    expect(product).toMatchObject({
+      hsnSacCode: "09012100",
+      gstSupplyType: "TAXABLE",
+      gstPricingMode: "INCLUSIVE",
+    });
     const restarted = new SmartBizApplication(database, runtime(), 30);
     await expect(
       restarted.listProducts(ownerId, { search: "पावडर" }),
@@ -365,7 +391,7 @@ describe("business and catalogue application services", () => {
     expect(persisted[0]?.categoryName).toBe("चहा");
   });
 
-  it("requires a tax registration ID only when tax is enabled", async () => {
+  it("validates GST registration details and enables tax only for a regular registration", async () => {
     await expect(
       application.updateBusiness(ownerId, {
         ...businessProfile,
@@ -374,13 +400,51 @@ describe("business and catalogue application services", () => {
       }),
     ).rejects.toMatchObject({ code: "VALIDATION" });
 
+    const productId = await createProduct("Unclassified taxable item");
+    const product = (await application.listProducts(ownerId)).find(
+      (item) => item.id === productId,
+    );
+    if (!product) throw new Error("Product was not created.");
     const updated = await application.updateBusiness(ownerId, {
       ...businessProfile,
       taxEnabled: true,
-      taxRegistrationId: "GSTIN-EXAMPLE",
+      taxRegistrationId: "27AAPFU0939F1ZV",
+      gstRegistrationType: "REGULAR",
+      gstStateCode: "27",
+      gstRegisteredAddress: "GST registered office, Pune",
     });
     expect(updated.taxEnabled).toBe(true);
-    expect(updated.taxRegistrationId).toBe("GSTIN-EXAMPLE");
+    expect(updated.taxRegistrationId).toBe("27AAPFU0939F1ZV");
+    expect(updated.gstRegistrationType).toBe("REGULAR");
+    expect(updated.gstStateCode).toBe("27");
+    await expect(
+      application.saveProduct(
+        ownerId,
+        {
+          name: product.name,
+          sku: product.sku,
+          description: product.description,
+          taxCategory: "",
+          categoryId: product.categoryId,
+          unitId: product.unitId,
+          purchasePrice: "0",
+          sellingPrice: "0",
+          reorderThreshold: "0",
+        },
+        product.id,
+        product.version,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      application.updateBusiness(ownerId, {
+        ...businessProfile,
+        taxEnabled: true,
+        taxRegistrationId: "27AAPFU0939F1Z1",
+        gstRegistrationType: "REGULAR",
+        gstStateCode: "27",
+        gstRegisteredAddress: "Pune",
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
   it("rejects duplicate SKUs and malformed prices", async () => {

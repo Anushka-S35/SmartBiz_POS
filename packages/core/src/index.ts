@@ -57,6 +57,8 @@ export type {
   UnitRecord,
   UserRecord,
   UserRole,
+  TaxRateRecord,
+  GstDocumentType,
 } from "./models";
 export type {
   BarcodeInput,
@@ -79,7 +81,31 @@ export type {
   UnitInput,
   UserCreateInput,
 } from "./validation";
+export type {
+  ItcClassification,
+  ItcAdjustmentType,
+  PurchaseLineGstSnapshot,
+  PurchaseItcAdjustmentRecord,
+  GstRegisterScope,
+  GstRegisterLine,
+  GstRegister,
+  GstTaxSummary,
+  GstItcSummary,
+  GstNetLiabilitySummary,
+} from "./models";
 export { createLogger } from "./logging";
 export type { SafeLogEvent } from "./logging";
+export {
+  calculateGstLine,
+  hasValidGstinStructure,
+  hasValidHsnSacStructure,
+} from "./gst";
+export type {
+  GstLineInput,
+  GstLineResult,
+  GstPricingMode,
+  GstRegistrationType,
+  GstSupplyType,
+} from "./gst";
 export { isLocale, localeTag, translate } from "./i18n";
 export type { TranslationKey } from "./i18n";

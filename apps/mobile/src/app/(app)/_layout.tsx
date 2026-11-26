@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Platform,
   Pressable,
@@ -7,24 +7,54 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Redirect, Tabs, router, usePathname } from "expo-router";
 import { translate } from "@smartbiz/core";
-import { colors, spacing } from "../../theme";
+import { colors, radii, spacing } from "../../theme";
 import { useApp } from "../../context/app-context";
+
+type IconName = React.ComponentProps<typeof MaterialCommunityIcons>["name"];
+type NavItem = { label: string; route: string; key: string; icon: IconName };
 
 export default function TabLayout(): React.JSX.Element {
   const { locale, user } = useApp();
   const { width } = useWindowDimensions();
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(false);
   const desktop = Platform.OS === "web" && width >= 1024;
   if (!user) return <Redirect href="/sign-in" />;
   const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
-  const navigation = [
-    { label: t("overview"), route: "/(app)", key: "/" },
-    { label: t("billing"), route: "/(app)/billing", key: "/billing" },
-    { label: t("products"), route: "/(app)/products", key: "/products" },
-    { label: t("inventory"), route: "/(app)/inventory", key: "/inventory" },
-    { label: t("customers"), route: "/(app)/customers", key: "/customers" },
+  const navigation: NavItem[] = [
+    {
+      label: t("overview"),
+      route: "/(app)",
+      key: "/",
+      icon: "view-dashboard-outline",
+    },
+    {
+      label: t("billing"),
+      route: "/(app)/billing",
+      key: "/billing",
+      icon: "point-of-sale",
+    },
+    {
+      label: t("products"),
+      route: "/(app)/products",
+      key: "/products",
+      icon: "tag-multiple-outline",
+    },
+    {
+      label: t("inventory"),
+      route: "/(app)/inventory",
+      key: "/inventory",
+      icon: "package-variant-closed",
+    },
+    {
+      label: t("customers"),
+      route: "/(app)/customers",
+      key: "/customers",
+      icon: "account-group-outline",
+    },
     ...(user.role === "CASHIER"
       ? []
       : [
@@ -32,9 +62,15 @@ export default function TabLayout(): React.JSX.Element {
             label: t("suppliers"),
             route: "/(app)/suppliers",
             key: "/suppliers",
+            icon: "truck-outline" as const,
           },
         ]),
-    { label: t("reports"), route: "/(app)/reports", key: "/reports" },
+    {
+      label: t("reports"),
+      route: "/(app)/reports",
+      key: "/reports",
+      icon: "chart-box-outline",
+    },
     ...(user.role === "CASHIER"
       ? []
       : [
@@ -42,99 +78,165 @@ export default function TabLayout(): React.JSX.Element {
             label: t("categoriesUnits"),
             route: "/(app)/categories",
             key: "/categories",
+            icon: "shape-outline" as const,
           },
         ]),
     ...(user.role === "ADMIN"
-      ? [{ label: t("team"), route: "/(app)/team", key: "/team" }]
+      ? [
+          {
+            label: t("team"),
+            route: "/(app)/team",
+            key: "/team",
+            icon: "account-cog-outline" as const,
+          },
+        ]
       : []),
-    { label: t("settings"), route: "/(app)/settings", key: "/settings" },
+    {
+      label: t("settings"),
+      route: "/(app)/settings",
+      key: "/settings",
+      icon: "cog-outline",
+    },
   ];
   return (
     <View style={styles.shell}>
       {desktop ? (
-        <View style={styles.sidebar}>
-          <Text style={styles.brand}>SMARTBIZ POS</Text>
-          <Text style={styles.groupLabel}>WORKSPACE</Text>
-          {navigation.slice(0, 7).map((item) => (
-            <Pressable
-              key={item.key}
-              onPress={() => router.push(item.route as never)}
-              style={[
-                styles.navItem,
-                pathname.endsWith(item.key) && styles.navActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.navText,
-                  pathname.endsWith(item.key) && styles.navTextActive,
-                ]}
+        <View style={[styles.sidebar, collapsed && styles.sidebarCollapsed]}>
+          <View style={styles.brandRow}>
+            <MaterialCommunityIcons
+              name="storefront-outline"
+              size={22}
+              color={colors.surface}
+            />
+            {!collapsed ? <Text style={styles.brand}>SMARTBIZ POS</Text> : null}
+          </View>
+          {navigation.map((item) => {
+            const active =
+              item.key === "/"
+                ? pathname === "/" || pathname === "/(app)"
+                : pathname.endsWith(item.key);
+            return (
+              <Pressable
+                key={item.key}
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+                onPress={() => router.push(item.route as never)}
+                style={[styles.navItem, active && styles.navActive]}
               >
-                {item.label}
-              </Text>
-            </Pressable>
-          ))}
-          <Text style={styles.groupLabel}>MANAGEMENT</Text>
-          {navigation.slice(7).map((item) => (
+                <MaterialCommunityIcons
+                  name={item.icon}
+                  size={20}
+                  color={active ? colors.surface : "#CBD5E1"}
+                />
+                {!collapsed ? (
+                  <Text
+                    style={[styles.navText, active && styles.navTextActive]}
+                  >
+                    {item.label}
+                  </Text>
+                ) : null}
+              </Pressable>
+            );
+          })}
+          <View style={styles.sidebarFooter}>
             <Pressable
-              key={item.key}
-              onPress={() => router.push(item.route as never)}
-              style={[
-                styles.navItem,
-                pathname.endsWith(item.key) && styles.navActive,
-              ]}
+              onPress={() => setCollapsed((value) => !value)}
+              style={styles.collapseButton}
+              accessibilityRole="button"
+              accessibilityLabel={
+                collapsed ? t("expandSidebar") : t("collapseSidebar")
+              }
             >
-              <Text
-                style={[
-                  styles.navText,
-                  pathname.endsWith(item.key) && styles.navTextActive,
-                ]}
-              >
-                {item.label}
-              </Text>
+              <MaterialCommunityIcons
+                name={collapsed ? "chevron-right" : "chevron-left"}
+                size={20}
+                color="#CBD5E1"
+              />
+              {!collapsed ? (
+                <Text style={styles.navText}>{t("collapseSidebar")}</Text>
+              ) : null}
             </Pressable>
-          ))}
+          </View>
         </View>
       ) : null}
       <View style={styles.main}>
         <Tabs
           screenOptions={{
             headerShown: false,
-            tabBarActiveTintColor: colors.deepNavy,
+            tabBarActiveTintColor: colors.steelBlue,
             tabBarInactiveTintColor: colors.mutedBlue,
             tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-            tabBarStyle: desktop
-              ? { display: "none" }
-              : {
-                  minHeight: 60,
-                  paddingBottom: 6,
-                  paddingTop: 4,
-                  borderTopColor: colors.border,
-                  backgroundColor: colors.surface,
-                },
+            tabBarStyle: desktop ? { display: "none" } : styles.tabBar,
           }}
         >
           <Tabs.Screen
             name="index"
-            options={
-              desktop
-                ? { title: t("overview"), href: null }
-                : { title: t("overview") }
-            }
+            options={{
+              title: t("overview"),
+              href: desktop ? null : ("/" as never),
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons
+                  name="view-dashboard-outline"
+                  color={color}
+                  size={size}
+                />
+              ),
+            }}
+          />
+          <Tabs.Screen
+            name="billing"
+            options={{
+              title: t("billing"),
+              href: desktop ? null : "/billing",
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons
+                  name="point-of-sale"
+                  color={color}
+                  size={size}
+                />
+              ),
+            }}
           />
           <Tabs.Screen
             name="products"
-            options={
-              desktop
-                ? { title: t("products"), href: null }
-                : { title: t("products") }
-            }
+            options={{
+              title: t("products"),
+              href: desktop ? null : "/products",
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons
+                  name="tag-multiple-outline"
+                  color={color}
+                  size={size}
+                />
+              ),
+            }}
           />
           <Tabs.Screen
             name="inventory"
             options={{
               title: t("inventory"),
               href: desktop ? null : "/inventory",
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons
+                  name="package-variant-closed"
+                  color={color}
+                  size={size}
+                />
+              ),
+            }}
+          />
+          <Tabs.Screen
+            name="more"
+            options={{
+              title: t("more"),
+              href: desktop ? null : ("/more" as never),
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons
+                  name="dots-horizontal-circle-outline"
+                  color={color}
+                  size={size}
+                />
+              ),
             }}
           />
           <Tabs.Screen
@@ -147,29 +249,13 @@ export default function TabLayout(): React.JSX.Element {
           />
           <Tabs.Screen
             name="reports"
-            options={{
-              title: t("reports"),
-              href: desktop ? null : ("/(app)/reports" as never),
-            }}
-          />
-          <Tabs.Screen
-            name="billing"
-            options={{ title: t("billing"), href: desktop ? null : "/billing" }}
+            options={{ title: t("reports"), href: null }}
           />
           <Tabs.Screen
             name="categories"
-            options={{
-              title: t("categoriesUnits"),
-              href: null,
-            }}
+            options={{ title: t("categoriesUnits"), href: null }}
           />
-          <Tabs.Screen
-            name="team"
-            options={{
-              title: t("team"),
-              href: null,
-            }}
-          />
+          <Tabs.Screen name="team" options={{ title: t("team"), href: null }} />
           <Tabs.Screen
             name="settings"
             options={{ title: t("settings"), href: null }}
@@ -183,37 +269,56 @@ export default function TabLayout(): React.JSX.Element {
 const styles = StyleSheet.create({
   shell: { flex: 1, flexDirection: "row", backgroundColor: colors.background },
   sidebar: {
-    width: 236,
+    width: 240,
     backgroundColor: colors.deepNavy,
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.xl,
+    paddingTop: spacing.lg,
     gap: spacing.xs,
+  },
+  sidebarCollapsed: { width: 76, paddingHorizontal: spacing.sm },
+  brandRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.md,
   },
   brand: {
     color: colors.surface,
     fontWeight: "800",
-    fontSize: 16,
-    letterSpacing: 0.8,
-    marginBottom: spacing.xl,
-    paddingHorizontal: spacing.sm,
-  },
-  groupLabel: {
-    color: colors.mutedBlue,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginTop: spacing.md,
-    marginBottom: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    fontSize: 15,
+    letterSpacing: 0.5,
   },
   navItem: {
-    minHeight: 42,
-    justifyContent: "center",
-    borderRadius: 6,
+    minHeight: 46,
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.md,
+    borderRadius: radii.md,
     paddingHorizontal: spacing.sm,
   },
   navActive: { backgroundColor: colors.steelBlue },
-  navText: { color: "#E1E5E5", fontSize: 14, fontWeight: "500" },
+  navText: { color: "#CBD5E1", fontSize: 14, fontWeight: "500" },
   navTextActive: { color: colors.surface, fontWeight: "700" },
+  sidebarFooter: {
+    flex: 1,
+    justifyContent: "flex-end",
+    paddingBottom: spacing.md,
+  },
+  collapseButton: {
+    minHeight: 44,
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.md,
+    paddingHorizontal: spacing.sm,
+  },
   main: { flex: 1, minWidth: 0 },
+  tabBar: {
+    minHeight: 64,
+    paddingBottom: 7,
+    paddingTop: 5,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+  },
 });

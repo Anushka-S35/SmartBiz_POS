@@ -2,7 +2,7 @@ import Papa from "papaparse";
 import { restoreCsvValue, safeCsvRows } from "./csv";
 import { AppError, isConstraintError, persistenceConflict } from "./errors";
 import { validateBarcode, generateInternalBarcode } from "./barcode";
-import { hashPassword, verifyPassword } from "./password";
+import { hashPassword, verifyPassword, PASSWORD_ITERATIONS } from "./password";
 import { assertPermission, type Permission } from "./permissions";
 import {
   businessProfileSchema,
@@ -18,6 +18,8 @@ import {
   salesReportSchema,
   supplierCreditSchema,
   supplierPaymentSchema,
+  purchaseItcAdjustmentSchema,
+  gstRegisterSchema,
   dateRangeSchema,
   stockMovementSchema,
   taxRateSchema,
@@ -34,6 +36,8 @@ import {
   type CustomerInput,
   type SupplierInput,
   type PurchaseInput,
+  type PurchaseItcAdjustmentInput,
+  type GstRegisterInput,
   type SalesReportInput,
   type SupplierCreditInput,
   type SupplierPaymentInput,
@@ -78,8 +82,18 @@ import type {
   InvoiceRecord,
   InvoiceLineRecord,
   PaymentRecord,
+  TaxRateRecord,
+  ItcClassification,
+  ItcAdjustmentType,
+  PurchaseItcAdjustmentRecord,
+  GstRegisterLine,
+  GstRegister,
+  GstTaxSummary,
+  GstItcSummary,
+  GstNetLiabilitySummary,
 } from "./models";
 import { isLocale } from "./i18n";
+import { calculateGstLine, hasValidGstinStructure, hasValidHsnSacStructure } from "./gst";
 
 interface BusinessRow {
   id: string;
@@ -95,6 +109,13 @@ interface BusinessRow {
   invoice_prefix: string;
   tax_enabled: number;
   tax_registration_id: string | null;
+  gst_registration_type: BusinessProfile["gstRegistrationType"];
+  gst_trade_name: string;
+  gst_state_code: string;
+  gst_registered_address: string;
+  gst_financial_year_start_month: number;
+  gst_invoice_prefix: string;
+  gst_invoice_footer: string;
   allow_multiple_barcodes: number;
   setup_complete: number;
 }
@@ -134,6 +155,9 @@ interface ProductRow {
   sku: string;
   description: string;
   tax_category: string;
+  hsn_sac_code: string;
+  gst_supply_type: ProductRecord["gstSupplyType"];
+  gst_pricing_mode: ProductRecord["gstPricingMode"];
   category_id: string | null;
   category_name_snapshot: string;
   unit_id: string;
@@ -155,6 +179,8 @@ interface CustomerRow {
   phone: string;
   email: string;
   address: string;
+  gstin: string;
+  state_code: string;
   archived_at: string | null;
 }
 
@@ -173,6 +199,18 @@ interface InvoiceRow {
   posted_at: string | null;
   cancelled_at: string | null;
   cancellation_reason: string;
+  gst_document_type: InvoiceRecord["documentType"];
+  customer_gstin_snapshot: string;
+  customer_address_snapshot: string;
+  customer_state_code_snapshot: string;
+  supplier_gstin_snapshot: string;
+  supplier_legal_name_snapshot: string;
+  supplier_trade_name_snapshot: string;
+  supplier_address_snapshot: string;
+  supplier_state_code_snapshot: string;
+  place_of_supply_state_code: string;
+  reverse_charge: number;
+  financial_year_snapshot: string;
 }
 
 export interface SetupState {
@@ -214,6 +252,13 @@ function mapBusiness(row: BusinessRow): BusinessProfile {
     invoicePrefix: row.invoice_prefix,
     taxEnabled: row.tax_enabled === 1,
     taxRegistrationId: row.tax_registration_id,
+    gstRegistrationType: row.gst_registration_type,
+    gstTradeName: row.gst_trade_name,
+    gstStateCode: row.gst_state_code,
+    gstRegisteredAddress: row.gst_registered_address,
+    gstFinancialYearStartMonth: row.gst_financial_year_start_month,
+    gstInvoicePrefix: row.gst_invoice_prefix,
+    gstInvoiceFooter: row.gst_invoice_footer,
     allowMultipleBarcodes: row.allow_multiple_barcodes === 1,
     setupComplete: row.setup_complete === 1,
   };
@@ -263,6 +308,9 @@ function mapProduct(row: ProductRow): ProductRecord {
     sku: row.sku,
     description: row.description,
     taxCategory: row.tax_category,
+    hsnSacCode: row.hsn_sac_code,
+    gstSupplyType: row.gst_supply_type,
+    gstPricingMode: row.gst_pricing_mode,
     categoryId: row.category_id,
     categoryName: row.category_name_snapshot,
     unitId: row.unit_id,
@@ -281,6 +329,22 @@ function mapProduct(row: ProductRow): ProductRecord {
 
 function normalized(value: string): string {
   return value.trim().normalize("NFKC").toLowerCase();
+}
+
+function financialYearLabel(
+  timestamp: string,
+  timezone: string,
+  startMonth: number,
+): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const startYear = month >= startMonth ? year : year - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
 }
 
 function roundedProduct(
@@ -332,6 +396,8 @@ function mapCustomer(row: CustomerRow): CustomerRecord {
     phone: row.phone,
     email: row.email,
     address: row.address,
+    gstin: row.gstin,
+    stateCode: row.state_code,
     archivedAt: row.archived_at,
   };
 }
@@ -346,6 +412,18 @@ function mapInvoice(
     invoiceNumber: row.invoice_number,
     customerId: row.customer_id,
     customerName: row.customer_name,
+    customerGstinSnapshot: row.customer_gstin_snapshot,
+    customerAddressSnapshot: row.customer_address_snapshot,
+    customerStateCodeSnapshot: row.customer_state_code_snapshot,
+    documentType: row.gst_document_type,
+    supplierGstinSnapshot: row.supplier_gstin_snapshot,
+    supplierLegalNameSnapshot: row.supplier_legal_name_snapshot,
+    supplierTradeNameSnapshot: row.supplier_trade_name_snapshot,
+    supplierAddressSnapshot: row.supplier_address_snapshot,
+    supplierStateCodeSnapshot: row.supplier_state_code_snapshot,
+    placeOfSupplyStateCode: row.place_of_supply_state_code,
+    reverseCharge: row.reverse_charge === 1,
+    financialYear: row.financial_year_snapshot,
     status: row.status,
     subtotalMinor: row.subtotal_minor,
     discountMinor: row.discount_minor,
@@ -475,8 +553,10 @@ export class SmartBizApplication {
         `INSERT INTO businesses (
           id, legal_name, display_name, address, phone, email, logo_uri, currency_code,
           currency_fraction_digits, timezone, invoice_prefix, tax_enabled, tax_registration_id,
-          allow_multiple_barcodes, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)`,
+          allow_multiple_barcodes, created_at, updated_at, gst_registration_type, gst_trade_name,
+          gst_state_code, gst_registered_address
+          ,gst_financial_year_start_month,gst_invoice_prefix,gst_invoice_footer
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $17, $18, $19, $20, $21, $22)`,
         [
           businessId,
           profile.legalName,
@@ -490,9 +570,16 @@ export class SmartBizApplication {
           profile.timezone,
           profile.invoicePrefix,
           profile.taxEnabled ? 1 : 0,
-          profile.taxEnabled ? profile.taxRegistrationId : null,
+          profile.taxRegistrationId || null,
           profile.allowMultipleBarcodes ? 1 : 0,
           now,
+          profile.gstRegistrationType,
+          profile.gstTradeName,
+          profile.gstStateCode,
+          profile.gstRegisteredAddress,
+          profile.gstFinancialYearStartMonth,
+          profile.gstInvoicePrefix,
+          profile.gstInvoiceFooter,
         ],
       );
       await this.database.execute(
@@ -627,7 +714,12 @@ export class SmartBizApplication {
           user.password_salt,
           user.password_iterations,
         )
-      : await verifyPassword(password, "0".repeat(64), "1".repeat(32), 600_000);
+      : await verifyPassword(
+          password,
+          "0".repeat(64),
+          "1".repeat(32),
+          PASSWORD_ITERATIONS,
+        );
     if (!user || !valid || user.disabled_at || !validRole(user.role)) {
       const current = this.failedLoginAttempts.get(normalizedEmail) ?? {
         count: 0,
@@ -703,6 +795,14 @@ export class SmartBizApplication {
     businessName: string;
     businessAddress: string;
     businessPhone: string;
+    gstRegistrationType: BusinessProfile["gstRegistrationType"];
+    gstin: string;
+    gstTradeName: string;
+    gstRegisteredAddress: string;
+    gstStateCode: string;
+    gstInvoiceFooter: string;
+    gstInvoicePrefix: string;
+    gstFinancialYearStartMonth: number;
   }> {
     const actor = await this.authorize(actorId, "billing.read");
     const rows = await this.database.query<{
@@ -712,8 +812,19 @@ export class SmartBizApplication {
       display_name: string;
       address: string;
       phone: string;
+      gst_registration_type: BusinessProfile["gstRegistrationType"];
+      tax_registration_id: string | null;
+      gst_trade_name: string;
+      gst_registered_address: string;
+      gst_state_code: string;
+      gst_invoice_footer: string;
+      gst_invoice_prefix: string;
+      gst_financial_year_start_month: number;
     }>(
-      "SELECT currency_code, currency_fraction_digits, tax_enabled, display_name, address, phone FROM businesses WHERE id = $1",
+      `SELECT currency_code,currency_fraction_digits,tax_enabled,display_name,address,phone,
+        gst_registration_type,tax_registration_id,gst_trade_name,gst_registered_address,
+        gst_state_code,gst_invoice_footer,gst_invoice_prefix,gst_financial_year_start_month
+       FROM businesses WHERE id = $1`,
       [actor.businessId],
     );
     if (!rows[0])
@@ -725,6 +836,14 @@ export class SmartBizApplication {
       businessName: rows[0].display_name,
       businessAddress: rows[0].address,
       businessPhone: rows[0].phone,
+      gstRegistrationType: rows[0].gst_registration_type,
+      gstin: rows[0].tax_registration_id ?? "",
+      gstTradeName: rows[0].gst_trade_name,
+      gstRegisteredAddress: rows[0].gst_registered_address,
+      gstStateCode: rows[0].gst_state_code,
+      gstInvoiceFooter: rows[0].gst_invoice_footer,
+      gstInvoicePrefix: rows[0].gst_invoice_prefix,
+      gstFinancialYearStartMonth: rows[0].gst_financial_year_start_month,
     };
   }
 
@@ -739,8 +858,11 @@ export class SmartBizApplication {
       `UPDATE businesses SET legal_name = $1, display_name = $2, address = $3, phone = $4,
         email = $5, logo_uri = $6, currency_code = $7, currency_fraction_digits = $8,
         timezone = $9, invoice_prefix = $10, tax_enabled = $11, tax_registration_id = $12,
-        allow_multiple_barcodes = $13, updated_at = $14, updated_by = $15
-       WHERE id = $16`,
+        allow_multiple_barcodes = $13, updated_at = $14, updated_by = $15,
+        gst_registration_type = $16, gst_trade_name = $17, gst_state_code = $18,
+        gst_registered_address = $19
+        ,gst_financial_year_start_month = $20,gst_invoice_prefix = $21,gst_invoice_footer = $22
+       WHERE id = $23`,
       [
         profile.legalName,
         profile.displayName,
@@ -753,10 +875,17 @@ export class SmartBizApplication {
         profile.timezone,
         profile.invoicePrefix,
         profile.taxEnabled ? 1 : 0,
-        profile.taxEnabled ? profile.taxRegistrationId : null,
+        profile.taxRegistrationId || null,
         profile.allowMultipleBarcodes ? 1 : 0,
         this.runtime.now(),
         actor.id,
+        profile.gstRegistrationType,
+        profile.gstTradeName,
+        profile.gstStateCode,
+        profile.gstRegisteredAddress,
+        profile.gstFinancialYearStartMonth,
+        profile.gstInvoicePrefix,
+        profile.gstInvoiceFooter,
         actor.businessId,
       ],
     );
@@ -1058,7 +1187,8 @@ export class SmartBizApplication {
       .replaceAll("%", "\\%")
       .replaceAll("_", "\\_");
     const rows = await this.database.query<ProductRow>(
-      `SELECT p.id, p.business_id, p.name, p.sku, p.description, p.tax_category, p.category_id,
+      `SELECT p.id, p.business_id, p.name, p.sku, p.description, p.tax_category,
+          p.hsn_sac_code,p.gst_supply_type,p.gst_pricing_mode,p.category_id,
           p.category_name_snapshot, p.unit_id, p.unit_name_snapshot, p.unit_precision_snapshot,
           p.purchase_price_minor, p.selling_price_minor, p.reorder_threshold_scaled, p.is_active,
           p.archived_at, p.version,
@@ -1098,6 +1228,23 @@ export class SmartBizApplication {
     const actor = await this.authorize(actorId, "products.manage");
     const input = validationResult(productSchema, value);
     const business = await this.getBusiness(actor.id);
+    if (
+      business.taxEnabled &&
+      (input.gstSupplyType ?? "TAXABLE") === "TAXABLE"
+    ) {
+      if (!input.taxCategory.trim())
+        throw new AppError(
+          "VALIDATION",
+          "Choose a configured GST tax category for this taxable product.",
+          "taxCategory",
+        );
+      if (!input.hsnSacCode?.trim())
+        throw new AppError(
+          "VALIDATION",
+          "Enter the product HSN/SAC code before enabling GST billing.",
+          "hsnSacCode",
+        );
+    }
     const unitRows = await this.database.query<UnitRow>(
       `SELECT id, business_id, name, code, quantity_precision, archived_at
        FROM units WHERE id = $1 AND business_id = $2 AND archived_at IS NULL`,
@@ -1152,7 +1299,8 @@ export class SmartBizApplication {
             tax_category = $5, category_id = $6, category_name_snapshot = $7, unit_id = $8,
             unit_name_snapshot = $9, unit_precision_snapshot = $10, purchase_price_minor = $11,
             selling_price_minor = $12, reorder_threshold_scaled = $13, version = version + 1,
-            updated_at = $14
+            updated_at = $14, hsn_sac_code = $18, gst_supply_type = $19,
+            gst_pricing_mode = $20
            WHERE id = $15 AND business_id = $16 AND version = $17 AND archived_at IS NULL`,
           [
             input.name,
@@ -1172,6 +1320,9 @@ export class SmartBizApplication {
             productId,
             actor.businessId,
             expectedVersion,
+            input.hsnSacCode ?? "",
+            input.gstSupplyType ?? "TAXABLE",
+            input.gstPricingMode ?? "EXCLUSIVE",
           ],
         );
         if (result.changes === 0) {
@@ -1191,8 +1342,9 @@ export class SmartBizApplication {
           `INSERT INTO products (
             id, business_id, name, sku, normalized_sku, description, tax_category, category_id,
             category_name_snapshot, unit_id, unit_name_snapshot, unit_precision_snapshot,
-            purchase_price_minor, selling_price_minor, reorder_threshold_scaled, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)`,
+            purchase_price_minor, selling_price_minor, reorder_threshold_scaled, created_at, updated_at,
+            hsn_sac_code, gst_supply_type, gst_pricing_mode
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16, $17, $18, $19)`,
           [
             id,
             actor.businessId,
@@ -1210,6 +1362,9 @@ export class SmartBizApplication {
             sellingPriceMinor,
             reorderThresholdScaled,
             now,
+            input.hsnSacCode ?? "",
+            input.gstSupplyType ?? "TAXABLE",
+            input.gstPricingMode ?? "EXCLUSIVE",
           ],
         );
       }
@@ -1332,6 +1487,9 @@ export class SmartBizApplication {
         sku: record.sku ?? "",
         description: record.description ?? "",
         taxCategory: record.taxCategory ?? "",
+        hsnSacCode: record.hsnSacCode ?? "",
+        gstSupplyType: record.gstSupplyType || "TAXABLE",
+        gstPricingMode: record.gstPricingMode || "EXCLUSIVE",
         categoryId: record.category?.trim() ? (category?.id ?? null) : null,
         unitId: unit?.id ?? "",
         purchasePrice: record.purchasePrice ?? "",
@@ -1429,6 +1587,9 @@ export class SmartBizApplication {
       sku: product.sku,
       description: product.description,
       taxCategory: product.taxCategory,
+      hsnSacCode: product.hsnSacCode,
+      gstSupplyType: product.gstSupplyType,
+      gstPricingMode: product.gstPricingMode,
       category: product.categoryName,
       unit: product.unitName,
       purchasePrice: minorUnitsToDecimal(
@@ -1450,6 +1611,9 @@ export class SmartBizApplication {
           sku: "",
           description: "",
           taxCategory: "",
+          hsnSacCode: "",
+          gstSupplyType: "TAXABLE",
+          gstPricingMode: "EXCLUSIVE",
           category: "",
           unit: "",
           purchasePrice: "",
@@ -1714,15 +1878,33 @@ export class SmartBizApplication {
   ): Promise<PurchaseRecord> {
     const actor = await this.authorize(actorId, "purchasing.manage");
     const input = validationResult(purchaseSchema, value);
-    const supplier = await this.database.query<{ id: string; name: string }>(
-      "SELECT id, name FROM suppliers WHERE id = $1 AND business_id = $2 AND archived_at IS NULL",
+    const supplier = await this.database.query<{
+      id: string;
+      name: string;
+      gstin: string;
+      state_code: string;
+    }>(
+      "SELECT id, name, gstin, state_code FROM suppliers WHERE id = $1 AND business_id = $2 AND archived_at IS NULL",
       [input.supplierId, actor.businessId],
     );
     if (!supplier[0])
       throw new AppError("NOT_FOUND", "An active supplier is required.");
     const business = await this.getBusiness(actorId);
+
+    const taxEnabled = business.taxEnabled;
+
+    if (supplier[0].gstin.trim().length > 0 && !hasValidGstinStructure(supplier[0].gstin)) {
+      throw new AppError("VALIDATION", "Supplier GSTIN has an invalid structure.", "supplierId");
+    }
+
+    if (input.reverseCharge === true) {
+      throw new AppError("UNSUPPORTED", "Reverse charge purchases are not supported in this phase.", "reverseCharge");
+    }
+
     const prepared = [];
     let totalMinor = 0;
+    let inputTaxTotalMinor = 0;
+
     for (const line of input.lines) {
       const product = await this.readProduct(actor.businessId, line.productId);
       if (!product || product.archivedAt || !product.isActive)
@@ -1751,20 +1933,57 @@ export class SmartBizApplication {
           "VALIDATION",
           "Quantity multiplied by unit cost exceeds the exact calculation limit.",
         );
+
+      const hsnSacCode = line.hsnSacCode ?? product.hsnSacCode;
+      const gstSupplyType = line.gstSupplyType ?? product.gstSupplyType;
+      const gstPricingMode = line.gstPricingMode ?? product.gstPricingMode;
+      const gstRateBasisPoints = line.gstRateBasisPoints ?? 0;
+      const cessRateBasisPoints = line.cessRateBasisPoints ?? 0;
+      const discountMinor = line.discountMinor ?? 0;
+
+      if (taxEnabled && gstSupplyType === "TAXABLE" && !hasValidHsnSacStructure(hsnSacCode)) {
+        throw new AppError(
+          "VALIDATION",
+          "Enter a valid 4, 6, or 8 digit HSN/SAC code for taxable purchases.",
+          "hsnSacCode",
+        );
+      }
+
       const lineTotalMinor = roundedProduct(
         unitCostMinor,
         quantityScaled,
         10 ** product.unitPrecision,
       );
-      if (
-        !Number.isSafeInteger(lineTotalMinor) ||
-        !Number.isSafeInteger(totalMinor + lineTotalMinor)
-      )
-        throw new AppError(
-          "VALIDATION",
-          "Purchase total exceeds the supported amount.",
-        );
+      const netLineMinor = lineTotalMinor;
+
+      let gstResult;
+      if (!taxEnabled || gstSupplyType !== "TAXABLE") {
+        gstResult = {
+          taxableValueMinor: netLineMinor,
+          cgstMinor: 0,
+          sgstMinor: 0,
+          igstMinor: 0,
+          cessMinor: 0,
+          totalTaxMinor: 0,
+          totalMinor: netLineMinor,
+        };
+      } else {
+        gstResult = calculateGstLine({
+          amountMinor: netLineMinor,
+          discountMinor: 0,
+          supplyType: gstSupplyType,
+          pricingMode: gstPricingMode,
+          gstRateBasisPoints,
+          cessRateBasisPoints,
+          supplierStateCode: supplier[0].state_code,
+          placeOfSupplyStateCode: supplier[0].state_code,
+        });
+      }
+
+      const inputTaxMinor = gstResult.cgstMinor + gstResult.sgstMinor + gstResult.igstMinor + gstResult.cessMinor;
+      inputTaxTotalMinor += inputTaxMinor;
       totalMinor += lineTotalMinor;
+
       prepared.push({
         lineId: this.runtime.createId(),
         movementId: this.runtime.createId(),
@@ -1772,8 +1991,25 @@ export class SmartBizApplication {
         quantityScaled,
         unitCostMinor,
         lineTotalMinor,
+        hsnSacCode,
+        gstSupplyType,
+        gstPricingMode,
+        gstRateBasisPoints,
+        cessRateBasisPoints,
+        taxableValueMinor: gstResult.taxableValueMinor,
+        inputCgstMinor: gstResult.cgstMinor,
+        inputSgstMinor: gstResult.sgstMinor,
+        inputIgstMinor: gstResult.igstMinor,
+        inputCessMinor: gstResult.cessMinor,
+        discountMinor,
       });
     }
+    if (!Number.isSafeInteger(totalMinor) || !Number.isSafeInteger(inputTaxTotalMinor))
+      throw new AppError(
+        "VALIDATION",
+        "Purchase total exceeds the supported amount.",
+      );
+
     const prior = await this.database.query<{
       id: string;
       supplier_id: string;
@@ -1815,8 +2051,8 @@ export class SmartBizApplication {
     const linesJson = JSON.stringify(prepared);
     try {
       await this.database.execute(
-        `INSERT INTO purchases (id, business_id, supplier_id, reference_number, idempotency_key, total_minor, actor_user_id, lines_json, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO purchases (id, business_id, supplier_id, reference_number, idempotency_key, total_minor, actor_user_id, lines_json, supplier_invoice_number, supplier_invoice_date, supplier_gstin_snapshot, input_tax_total_minor, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           purchaseId,
           actor.businessId,
@@ -1826,6 +2062,10 @@ export class SmartBizApplication {
           totalMinor,
           actor.id,
           linesJson,
+          input.supplierInvoiceNumber ?? "",
+          input.supplierInvoiceDate ?? "",
+          supplier[0].gstin,
+          inputTaxTotalMinor,
           this.runtime.now(),
         ],
       );
@@ -1898,10 +2138,14 @@ export class SmartBizApplication {
         supplier_id: string;
         supplier_name: string;
         reference_number: string;
+        supplier_invoice_number: string;
+        supplier_invoice_date: string;
+        supplier_gstin_snapshot: string;
         total_minor: number;
+        input_tax_total_minor: number;
         created_at: string;
       }>(
-        `SELECT p.id, p.supplier_id, s.name AS supplier_name, p.reference_number, p.total_minor, p.created_at
+        `SELECT p.id, p.supplier_id, s.name AS supplier_name, p.reference_number, p.supplier_invoice_number, p.supplier_invoice_date, p.supplier_gstin_snapshot, p.total_minor, p.input_tax_total_minor, p.created_at
          FROM purchases p JOIN suppliers s ON s.id = p.supplier_id WHERE p.id = $1 AND p.business_id = $2`,
         [purchaseId, businessId],
       ),
@@ -1913,8 +2157,17 @@ export class SmartBizApplication {
         quantity_scaled: number;
         unit_cost_minor: number;
         line_total_minor: number;
+        hsn_sac_snapshot: string;
+        gst_supply_type_snapshot: string;
+        gst_rate_basis_points: number;
+        taxable_value_minor: number;
+        input_cgst_minor: number;
+        input_sgst_minor: number;
+        input_igst_minor: number;
+        input_cess_minor: number;
+        itc_status: string;
       }>(
-        `SELECT id, product_id, product_name_snapshot, sku_snapshot, quantity_scaled, unit_cost_minor, line_total_minor
+        `SELECT id, product_id, product_name_snapshot, sku_snapshot, quantity_scaled, unit_cost_minor, line_total_minor, hsn_sac_snapshot, gst_supply_type_snapshot, gst_rate_basis_points, taxable_value_minor, input_cgst_minor, input_sgst_minor, input_igst_minor, input_cess_minor, itc_status
          FROM purchase_lines WHERE purchase_id = $1 ORDER BY rowid`,
         [purchaseId],
       ),
@@ -1926,8 +2179,13 @@ export class SmartBizApplication {
       supplierId: row.supplier_id,
       supplierName: row.supplier_name,
       referenceNumber: row.reference_number,
+      supplierInvoiceNumber: row.supplier_invoice_number,
+      supplierInvoiceDate: row.supplier_invoice_date,
+      supplierGstinSnapshot: row.supplier_gstin_snapshot,
       status: "RECEIVED",
       totalMinor: row.total_minor,
+      inputTaxTotalMinor: row.input_tax_total_minor,
+      reverseCharge: false,
       createdAt: row.created_at,
       lines: lines.map((line) => ({
         id: line.id,
@@ -1937,8 +2195,196 @@ export class SmartBizApplication {
         quantityScaled: line.quantity_scaled,
         unitCostMinor: line.unit_cost_minor,
         lineTotalMinor: line.line_total_minor,
+        gst: {
+          hsnSacCode: line.hsn_sac_snapshot,
+          gstSupplyType: line.gst_supply_type_snapshot as PurchaseRecord["lines"][number]["gst"]["gstSupplyType"],
+          gstPricingMode: "EXCLUSIVE",
+          gstRateBasisPoints: line.gst_rate_basis_points,
+          cessRateBasisPoints: 0,
+          taxableValueMinor: line.taxable_value_minor,
+          inputCgstMinor: line.input_cgst_minor,
+          inputSgstMinor: line.input_sgst_minor,
+          inputIgstMinor: line.input_igst_minor,
+          inputCessMinor: line.input_cess_minor,
+          inputTaxMinor:
+            line.input_cgst_minor +
+            line.input_sgst_minor +
+            line.input_igst_minor +
+            line.input_cess_minor,
+          itcStatus: (line.itc_status || "UNASSESSED") as PurchaseRecord["lines"][number]["gst"]["itcStatus"],
+        },
       })),
     };
+  }
+
+  async classifyPurchaseItc(
+    actorId: string,
+    purchaseId: string,
+    purchaseLineId: string,
+    classification: ItcClassification,
+    reason: string,
+  ): Promise<void> {
+    const actor = await this.authorize(actorId, "purchasing.manage");
+    const now = this.runtime.now();
+
+    const line = await this.database.query<{
+      id: string;
+      purchase_id: string;
+      itc_status: string;
+      input_cgst_minor: number;
+      input_sgst_minor: number;
+      input_igst_minor: number;
+      input_cess_minor: number;
+      gst_supply_type_snapshot: string;
+    }>(
+      `SELECT pl.id, pl.purchase_id, pl.itc_status, pl.input_cgst_minor, pl.input_sgst_minor, pl.input_igst_minor, pl.input_cess_minor, pl.gst_supply_type_snapshot
+       FROM purchase_lines pl JOIN purchases p ON p.id = pl.purchase_id
+       WHERE pl.id = $1 AND pl.purchase_id = $2 AND p.business_id = $3`,
+      [purchaseLineId, purchaseId, actor.businessId],
+    );
+    if (!line[0])
+      throw new AppError("NOT_FOUND", "Purchase line not found.");
+    if (line[0].gst_supply_type_snapshot !== "TAXABLE")
+      throw new AppError(
+        "VALIDATION",
+        "ITC can only be classified for taxable purchase lines.",
+      );
+
+    const idempotencyKey = `itc-classify:${purchaseLineId}:${classification}:${now}`;
+    try {
+      await this.database.execute(
+        `UPDATE purchase_lines SET itc_status = $1 WHERE id = $2`,
+        [classification, purchaseLineId],
+      );
+      await this.database.execute(
+        `INSERT INTO purchase_itc_adjustments (id, business_id, purchase_id, purchase_line_id, actor_user_id, adjustment_type, cgst_minor, sgst_minor, igst_minor, cess_minor, reason, idempotency_key, occurred_at)
+         VALUES ($1, $2, $3, $4, $5, 'CLAIM', $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          this.runtime.createId(),
+          actor.businessId,
+          purchaseId,
+          purchaseLineId,
+          actor.id,
+          line[0].input_cgst_minor,
+          line[0].input_sgst_minor,
+          line[0].input_igst_minor,
+          line[0].input_cess_minor,
+          reason.trim(),
+          idempotencyKey,
+          now,
+        ],
+      );
+    } catch (error) {
+      if (isConstraintError(error)) throw persistenceConflict(error);
+      throw error;
+    }
+  }
+
+
+  async adjustPurchaseItc(
+    actorId: string,
+    value: PurchaseItcAdjustmentInput,
+  ): Promise<void> {
+    const actor = await this.authorize(actorId, "purchasing.manage");
+    const input = validationResult(purchaseItcAdjustmentSchema, value);
+    const now = this.runtime.now();
+
+    const line = await this.database.query<{
+      id: string;
+      purchase_id: string;
+      input_cgst_minor: number;
+      input_sgst_minor: number;
+      input_igst_minor: number;
+      input_cess_minor: number;
+    }>(
+      `SELECT pl.id, pl.purchase_id, pl.input_cgst_minor, pl.input_sgst_minor, pl.input_igst_minor, pl.input_cess_minor
+       FROM purchase_lines pl JOIN purchases p ON p.id = pl.purchase_id
+       WHERE pl.id = $1 AND p.business_id = $2`,
+      [input.purchaseLineId, actor.businessId],
+    );
+    if (!line[0])
+      throw new AppError("NOT_FOUND", "Purchase line not found.");
+    if (line[0].purchase_id !== input.purchaseId)
+      throw new AppError("VALIDATION", "Purchase line does not belong to the specified purchase.");
+
+    const adjustmentTotal =
+      input.cgstMinor + input.sgstMinor + input.igstMinor + input.cessMinor;
+    if (adjustmentTotal <= 0)
+      throw new AppError(
+        "VALIDATION",
+        "Adjustment amount must be greater than zero.",
+      );
+
+    const prior = await this.database.query<{
+      id: string;
+    }>(
+      "SELECT id FROM purchase_itc_adjustments WHERE business_id = $1 AND idempotency_key = $2",
+      [actor.businessId, input.idempotencyKey],
+    );
+    if (prior[0])
+      return;
+
+    try {
+      await this.database.execute(
+        `INSERT INTO purchase_itc_adjustments (id, business_id, purchase_id, purchase_line_id, actor_user_id, adjustment_type, cgst_minor, sgst_minor, igst_minor, cess_minor, reason, idempotency_key, occurred_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+          this.runtime.createId(),
+          actor.businessId,
+          input.purchaseId,
+          input.purchaseLineId,
+          actor.id,
+          input.adjustmentType,
+          input.cgstMinor,
+          input.sgstMinor,
+          input.igstMinor,
+          input.cessMinor,
+          input.reason.trim(),
+          input.idempotencyKey,
+          now,
+        ],
+      );
+    } catch (error) {
+      if (isConstraintError(error)) throw persistenceConflict(error);
+      throw error;
+    }
+  }
+
+  async listPurchaseItcAdjustments(
+    actorId: string,
+    purchaseId?: string,
+  ): Promise<PurchaseItcAdjustmentRecord[]> {
+    const actor = await this.authorize(actorId, "purchasing.read");
+    const rows = await this.database.query<{
+      id: string;
+      purchase_id: string;
+      purchase_line_id: string;
+      adjustment_type: string;
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_minor: number;
+      reason: string;
+      occurred_at: string;
+    }>(
+      `SELECT id, purchase_id, purchase_line_id, adjustment_type, cgst_minor, sgst_minor, igst_minor, cess_minor, reason, occurred_at
+       FROM purchase_itc_adjustments WHERE business_id = $1 AND ($2 = '' OR purchase_id = $2)
+       ORDER BY occurred_at DESC, id DESC`,
+      [actor.businessId, purchaseId ?? ""],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      purchaseId: row.purchase_id,
+      purchaseLineId: row.purchase_line_id,
+      adjustmentType: row.adjustment_type as ItcAdjustmentType,
+      cgstMinor: row.cgst_minor,
+      sgstMinor: row.sgst_minor,
+      igstMinor: row.igst_minor,
+      cessMinor: row.cess_minor,
+      reason: row.reason,
+      occurredAt: row.occurred_at,
+      actorName: "",
+    }));
   }
 
   async createSupplierCredit(
@@ -2371,6 +2817,386 @@ export class SmartBizApplication {
     );
   }
 
+
+  async getGstSalesRegister(
+    actorId: string,
+    value: GstRegisterInput,
+  ): Promise<GstRegister> {
+    const actor = await this.authorize(actorId, "billing.read");
+    const input = validationResult(gstRegisterSchema, value);
+
+    const rows = await this.database.query<{
+      id: string;
+      invoice_number: string;
+      created_at: string;
+      customer_gstin_snapshot: string;
+      customer_name: string;
+      document_type: string;
+      status: string;
+      subtotal_minor: number;
+      tax_minor: number;
+      total_minor: number;
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_minor: number;
+      taxable_value_minor: number;
+    }>(
+      `SELECT i.id, i.invoice_number, i.created_at, i.customer_gstin_snapshot,
+        coalesce(nullif(i.customer_name_snapshot,''), 'Walk-in') AS customer_name,
+        i.gst_document_type AS document_type, i.status,
+        i.subtotal_minor, i.tax_minor, i.total_minor,
+        coalesce(sum(il.cgst_minor),0) AS cgst_minor,
+        coalesce(sum(il.sgst_minor),0) AS sgst_minor,
+        coalesce(sum(il.igst_minor),0) AS igst_minor,
+        coalesce(sum(il.cess_minor),0) AS cess_minor,
+        coalesce(sum(il.gst_taxable_value_minor),0) AS taxable_value_minor
+       FROM invoices i
+       LEFT JOIN invoice_lines il ON il.invoice_id = i.id
+       WHERE i.business_id = $1 AND i.created_at >= $2 AND i.created_at < $3
+       GROUP BY i.id, i.invoice_number, i.created_at, i.customer_gstin_snapshot, i.customer_name_snapshot, i.gst_document_type, i.status, i.subtotal_minor, i.tax_minor, i.total_minor
+       ORDER BY i.created_at DESC`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const lines: GstRegisterLine[] = rows.map((row) => ({
+      documentNumber: row.invoice_number,
+      documentDate: row.created_at,
+      partyGstin: row.customer_gstin_snapshot,
+      partyName: row.customer_name,
+      hsnSacCode: "",
+      taxableValueMinor: row.taxable_value_minor,
+      cgstMinor: row.cgst_minor,
+      sgstMinor: row.sgst_minor,
+      igstMinor: row.igst_minor,
+      cessMinor: row.cess_minor,
+      totalTaxMinor: row.tax_minor,
+      totalMinor: row.total_minor,
+      documentType: row.document_type,
+      status: row.status,
+      reference: row.id,
+    }));
+
+    const totals = lines.reduce(
+      (acc, line) => ({
+        taxableValueMinor: acc.taxableValueMinor + line.taxableValueMinor,
+        cgstMinor: acc.cgstMinor + line.cgstMinor,
+        sgstMinor: acc.sgstMinor + line.sgstMinor,
+        igstMinor: acc.igstMinor + line.igstMinor,
+        cessMinor: acc.cessMinor + line.cessMinor,
+        totalTaxMinor: acc.totalTaxMinor + line.totalTaxMinor,
+        totalMinor: acc.totalMinor + line.totalMinor,
+      }),
+      {
+        taxableValueMinor: 0,
+        cgstMinor: 0,
+        sgstMinor: 0,
+        igstMinor: 0,
+        cessMinor: 0,
+        totalTaxMinor: 0,
+        totalMinor: 0,
+      },
+    );
+
+    return {
+      scope: "SALES",
+      from: input.from,
+      to: input.to,
+      lines,
+      totals,
+    };
+  }
+
+  async getGstPurchaseRegister(
+    actorId: string,
+    value: GstRegisterInput,
+  ): Promise<GstRegister> {
+    const actor = await this.authorize(actorId, "purchasing.read");
+    const input = validationResult(gstRegisterSchema, value);
+
+    const rows = await this.database.query<{
+      id: string;
+      reference_number: string;
+      supplier_invoice_number: string;
+      supplier_invoice_date: string;
+      supplier_gstin_snapshot: string;
+      supplier_name: string;
+      created_at: string;
+      total_minor: number;
+      input_tax_total_minor: number;
+    }>(
+      `SELECT p.id, p.reference_number, p.supplier_invoice_number, p.supplier_invoice_date, p.supplier_gstin_snapshot, s.name AS supplier_name, p.created_at, p.total_minor, p.input_tax_total_minor
+       FROM purchases p JOIN suppliers s ON s.id = p.supplier_id
+       WHERE p.business_id = $1 AND p.created_at >= $2 AND p.created_at < $3
+       ORDER BY p.created_at DESC`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const lineDetails = await this.database.query<{
+      purchase_id: string;
+      hsn_sac_snapshot: string;
+      taxable_value_minor: number;
+      input_cgst_minor: number;
+      input_sgst_minor: number;
+      input_igst_minor: number;
+      input_cess_minor: number;
+    }>(
+      `SELECT purchase_id, hsn_sac_snapshot, taxable_value_minor, input_cgst_minor, input_sgst_minor, input_igst_minor, input_cess_minor
+       FROM purchase_lines WHERE purchase_id IN (
+         SELECT id FROM purchases WHERE business_id = $1 AND created_at >= $2 AND created_at < $3
+       )`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const detailsByPurchase = new Map<string, Array<typeof lineDetails[number]>>();
+    for (const d of lineDetails) {
+      const arr = detailsByPurchase.get(d.purchase_id) ?? [];
+      arr.push(d);
+      detailsByPurchase.set(d.purchase_id, arr);
+    }
+
+    const lines: GstRegisterLine[] = rows.map((row) => {
+      const details = detailsByPurchase.get(row.id) ?? [];
+      const taxableValueMinor = details.reduce((sum, d) => sum + d.taxable_value_minor, 0);
+      const cgstMinor = details.reduce((sum, d) => sum + d.input_cgst_minor, 0);
+      const sgstMinor = details.reduce((sum, d) => sum + d.input_sgst_minor, 0);
+      const igstMinor = details.reduce((sum, d) => sum + d.input_igst_minor, 0);
+      const cessMinor = details.reduce((sum, d) => sum + d.input_cess_minor, 0);
+      const totalTaxMinor = cgstMinor + sgstMinor + igstMinor + cessMinor;
+      return {
+        documentNumber: row.supplier_invoice_number || row.reference_number,
+        documentDate: row.supplier_invoice_date || row.created_at,
+        partyGstin: row.supplier_gstin_snapshot,
+        partyName: row.supplier_name,
+        hsnSacCode: details.length > 0 ? details[0]!.hsn_sac_snapshot : "",
+        taxableValueMinor,
+        cgstMinor,
+        sgstMinor,
+        igstMinor,
+        cessMinor,
+        totalTaxMinor,
+        totalMinor: row.total_minor,
+        documentType: "PURCHASE",
+        status: "RECEIVED",
+        reference: row.id,
+      };
+    });
+
+    const totals = lines.reduce(
+      (acc, line) => ({
+        taxableValueMinor: acc.taxableValueMinor + line.taxableValueMinor,
+        cgstMinor: acc.cgstMinor + line.cgstMinor,
+        sgstMinor: acc.sgstMinor + line.sgstMinor,
+        igstMinor: acc.igstMinor + line.igstMinor,
+        cessMinor: acc.cessMinor + line.cessMinor,
+        totalTaxMinor: acc.totalTaxMinor + line.totalTaxMinor,
+        totalMinor: acc.totalMinor + line.totalMinor,
+      }),
+      {
+        taxableValueMinor: 0,
+        cgstMinor: 0,
+        sgstMinor: 0,
+        igstMinor: 0,
+        cessMinor: 0,
+        totalTaxMinor: 0,
+        totalMinor: 0,
+      },
+    );
+
+    return {
+      scope: "PURCHASES",
+      from: input.from,
+      to: input.to,
+      lines,
+      totals,
+    };
+  }
+
+
+  async getGstTaxSummary(
+    actorId: string,
+    value: GstRegisterInput,
+  ): Promise<GstTaxSummary[]> {
+    const actor = await this.authorize(actorId, "billing.read");
+    const input = validationResult(gstRegisterSchema, value);
+
+    const rows = await this.database.query<{
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_minor: number;
+      taxable_value_minor: number;
+    }>(
+      `SELECT coalesce(sum(il.cgst_minor),0) AS cgst_minor,
+        coalesce(sum(il.sgst_minor),0) AS sgst_minor,
+        coalesce(sum(il.igst_minor),0) AS igst_minor,
+        coalesce(sum(il.cess_minor),0) AS cess_minor,
+        coalesce(sum(il.gst_taxable_value_minor),0) AS taxable_value_minor
+       FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id
+       WHERE i.business_id = $1 AND i.created_at >= $2 AND i.created_at < $3 AND i.status = 'POSTED'`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const row = rows[0];
+    return [
+      {
+        taxHead: "CGST",
+        taxableValueMinor: row?.taxable_value_minor ?? 0,
+        taxMinor: row?.cgst_minor ?? 0,
+      },
+      {
+        taxHead: "SGST",
+        taxableValueMinor: row?.taxable_value_minor ?? 0,
+        taxMinor: row?.sgst_minor ?? 0,
+      },
+      {
+        taxHead: "IGST",
+        taxableValueMinor: row?.taxable_value_minor ?? 0,
+        taxMinor: row?.igst_minor ?? 0,
+      },
+      {
+        taxHead: "CESS",
+        taxableValueMinor: row?.taxable_value_minor ?? 0,
+        taxMinor: row?.cess_minor ?? 0,
+      },
+    ];
+  }
+
+
+  async getGstItcSummary(
+    actorId: string,
+    value: GstRegisterInput,
+  ): Promise<GstItcSummary[]> {
+    const actor = await this.authorize(actorId, "purchasing.read");
+    const input = validationResult(gstRegisterSchema, value);
+
+    const rows = await this.database.query<{
+      itc_status: string;
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_minor: number;
+      line_count: number;
+    }>(
+      `SELECT pl.itc_status,
+        coalesce(sum(pl.input_cgst_minor),0) AS cgst_minor,
+        coalesce(sum(pl.input_sgst_minor),0) AS sgst_minor,
+        coalesce(sum(pl.input_igst_minor),0) AS igst_minor,
+        coalesce(sum(pl.input_cess_minor),0) AS cess_minor,
+        count(*) AS line_count
+       FROM purchase_lines pl JOIN purchases p ON p.id = pl.purchase_id
+       WHERE p.business_id = $1 AND p.created_at >= $2 AND p.created_at < $3 AND pl.gst_supply_type_snapshot = 'TAXABLE'
+       GROUP BY pl.itc_status`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const byStatus = new Map<string, GstItcSummary>();
+    for (const row of rows) {
+      byStatus.set(row.itc_status, {
+        classification: row.itc_status as ItcClassification,
+        cgstMinor: row.cgst_minor,
+        sgstMinor: row.sgst_minor,
+        igstMinor: row.igst_minor,
+        cessMinor: row.cess_minor,
+        totalMinor:
+          row.cgst_minor + row.sgst_minor + row.igst_minor + row.cess_minor,
+        lineCount: row.line_count,
+      });
+    }
+
+    return [
+      "ELIGIBLE",
+      "INELIGIBLE",
+      "BLOCKED",
+      "UNASSESSED",
+    ].map((status) => byStatus.get(status) ?? {
+      classification: status as ItcClassification,
+      cgstMinor: 0,
+      sgstMinor: 0,
+      igstMinor: 0,
+      cessMinor: 0,
+      totalMinor: 0,
+      lineCount: 0,
+    });
+  }
+
+
+  async getGstNetLiability(
+    actorId: string,
+    value: GstRegisterInput,
+  ): Promise<GstNetLiabilitySummary> {
+    const actor = await this.authorize(actorId, "billing.read");
+    const input = validationResult(gstRegisterSchema, value);
+
+    const salesRows = await this.database.query<{
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_minor: number;
+    }>(
+      `SELECT coalesce(sum(il.cgst_minor),0) AS cgst_minor,
+        coalesce(sum(il.sgst_minor),0) AS sgst_minor,
+        coalesce(sum(il.igst_minor),0) AS igst_minor,
+        coalesce(sum(il.cess_minor),0) AS cess_minor
+       FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id
+       WHERE i.business_id = $1 AND i.created_at >= $2 AND i.created_at < $3 AND i.status = 'POSTED'`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const itcRows = await this.database.query<{
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_minor: number;
+    }>(
+      `SELECT coalesce(sum(pl.input_cgst_minor),0) AS cgst_minor,
+        coalesce(sum(pl.input_sgst_minor),0) AS sgst_minor,
+        coalesce(sum(pl.input_igst_minor),0) AS igst_minor,
+        coalesce(sum(pl.input_cess_minor),0) AS cess_minor
+       FROM purchase_lines pl JOIN purchases p ON p.id = pl.purchase_id
+       WHERE p.business_id = $1 AND p.created_at >= $2 AND p.created_at < $3 AND pl.itc_status = 'ELIGIBLE'`,
+      [actor.businessId, input.from, input.to],
+    );
+
+    const sales = salesRows[0];
+    const itc = itcRows[0];
+
+    const outputCgst = sales?.cgst_minor ?? 0;
+    const outputSgst = sales?.sgst_minor ?? 0;
+    const outputIgst = sales?.igst_minor ?? 0;
+    const outputCess = sales?.cess_minor ?? 0;
+    const outputTotal = outputCgst + outputSgst + outputIgst + outputCess;
+
+    const inputCgst = itc?.cgst_minor ?? 0;
+    const inputSgst = itc?.sgst_minor ?? 0;
+    const inputIgst = itc?.igst_minor ?? 0;
+    const inputCess = itc?.cess_minor ?? 0;
+    const inputTotal = inputCgst + inputSgst + inputIgst + inputCess;
+
+    return {
+      outputCgstMinor: outputCgst,
+      outputSgstMinor: outputSgst,
+      outputIgstMinor: outputIgst,
+      outputCessMinor: outputCess,
+      outputTotalMinor: outputTotal,
+      inputCgstMinor: inputCgst,
+      inputSgstMinor: inputSgst,
+      inputIgstMinor: inputIgst,
+      inputCessMinor: inputCess,
+      inputTotalMinor: inputTotal,
+      eligibleInputCgstMinor: inputCgst,
+      eligibleInputSgstMinor: inputSgst,
+      eligibleInputIgstMinor: inputIgst,
+      eligibleInputCessMinor: inputCess,
+      eligibleInputTotalMinor: inputTotal,
+      netCgstMinor: Math.max(0, outputCgst - inputCgst),
+      netSgstMinor: Math.max(0, outputSgst - inputSgst),
+      netIgstMinor: Math.max(0, outputIgst - inputIgst),
+      netCessMinor: Math.max(0, outputCess - inputCess),
+      netPayableMinor: Math.max(0, outputTotal - inputTotal),
+    };
+  }
+
   async getInventoryValuation(actorId: string): Promise<InventoryValuation> {
     const actor = await this.authorize(actorId, "inventory.read");
     const rows = await this.database.query<{
@@ -2464,7 +3290,7 @@ export class SmartBizApplication {
     const query = search.trim();
     return this.database
       .query<CustomerRow>(
-        `SELECT id, name, phone, email, address, archived_at
+        `SELECT id, name, phone, email, address, gstin, state_code, archived_at
          FROM customers WHERE business_id = $1 AND archived_at IS NULL
            AND ($2 = '' OR normalized_name LIKE $3 OR normalized_phone LIKE $3 OR lower(email) LIKE $3)
          ORDER BY normalized_name LIMIT 100`,
@@ -2491,8 +3317,9 @@ export class SmartBizApplication {
         throw new AppError("NOT_FOUND", "Customer not found.");
       await this.database.execute(
         `UPDATE customers SET name = $1, normalized_name = $2, phone = $3,
-          normalized_phone = $4, email = $5, address = $6, updated_at = $7
-         WHERE id = $8 AND business_id = $9`,
+          normalized_phone = $4, email = $5, address = $6, updated_at = $7,
+          gstin = $8,state_code = $9
+         WHERE id = $10 AND business_id = $11`,
         [
           input.name,
           normalized(input.name),
@@ -2501,6 +3328,8 @@ export class SmartBizApplication {
           input.email,
           input.address,
           now,
+          input.gstin ?? "",
+          input.stateCode ?? "",
           id,
           actor.businessId,
         ],
@@ -2509,8 +3338,8 @@ export class SmartBizApplication {
       await this.database.execute(
         `INSERT INTO customers (
           id, business_id, name, normalized_name, phone, normalized_phone,
-          email, address, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
+          email, address, created_at, updated_at, gstin, state_code
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11)`,
         [
           id,
           actor.businessId,
@@ -2521,6 +3350,8 @@ export class SmartBizApplication {
           input.email,
           input.address,
           now,
+          input.gstin ?? "",
+          input.stateCode ?? "",
         ],
       );
     }
@@ -2537,7 +3368,7 @@ export class SmartBizApplication {
       ],
     );
     const rows = await this.database.query<CustomerRow>(
-      `SELECT id, name, phone, email, address, archived_at
+      `SELECT id, name, phone, email, address, gstin, state_code, archived_at
        FROM customers WHERE id = $1 AND business_id = $2`,
       [id, actor.businessId],
     );
@@ -2923,8 +3754,8 @@ export class SmartBizApplication {
     await this.database.execute(
       `INSERT INTO tax_rates (
         id, business_id, category_code, rate_basis_points, effective_at,
-        created_by, reason, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        created_by, reason, created_at, cess_rate_basis_points, source_reference
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         this.runtime.createId(),
         actor.businessId,
@@ -2934,6 +3765,8 @@ export class SmartBizApplication {
         actor.id,
         input.reason,
         this.runtime.now(),
+        input.cessRateBasisPoints,
+        input.sourceReference,
       ],
     );
     await this.database.execute(
@@ -2947,6 +3780,33 @@ export class SmartBizApplication {
         this.runtime.now(),
       ],
     );
+  }
+
+  async listTaxRates(actorId: string): Promise<TaxRateRecord[]> {
+    const actor = await this.authorize(actorId, "tax.manage");
+    const rows = await this.database.query<{
+      id: string;
+      category_code: string;
+      rate_basis_points: number;
+      cess_rate_basis_points: number;
+      effective_at: string;
+      source_reference: string;
+      reason: string;
+    }>(
+      `SELECT id,category_code,rate_basis_points,cess_rate_basis_points,
+        effective_at,source_reference,reason
+       FROM tax_rates WHERE business_id=$1 ORDER BY effective_at DESC,created_at DESC`,
+      [actor.businessId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      categoryCode: row.category_code,
+      rateBasisPoints: row.rate_basis_points,
+      cessRateBasisPoints: row.cess_rate_basis_points,
+      effectiveAt: row.effective_at,
+      sourceReference: row.source_reference,
+      reason: row.reason,
+    }));
   }
 
   async createInvoiceDraft(
@@ -2971,18 +3831,69 @@ export class SmartBizApplication {
         );
       return this.getInvoice(actorId, existing[0].id);
     }
+    const business = await this.getBusiness(actorId);
+    let customer = {
+      name: "Walk-in",
+      gstin: "",
+      address: "",
+      stateCode: "",
+    };
     if (input.customerId) {
-      const customer = await this.database.query<{ id: string }>(
-        "SELECT id FROM customers WHERE id = $1 AND business_id = $2 AND archived_at IS NULL",
+      const customerRows = await this.database.query<{
+        id: string;
+        name: string;
+        gstin: string;
+        address: string;
+        state_code: string;
+      }>(
+        `SELECT id,name,gstin,address,state_code FROM customers
+         WHERE id=$1 AND business_id=$2 AND archived_at IS NULL`,
         [input.customerId, actor.businessId],
       );
-      if (customer.length === 0)
+      const selectedCustomer = customerRows[0];
+      if (!selectedCustomer)
         throw new AppError(
           "NOT_FOUND",
           "Choose an active customer or Walk-in.",
         );
+      customer = {
+        name: selectedCustomer.name,
+        gstin: selectedCustomer.gstin,
+        address: selectedCustomer.address,
+        stateCode: selectedCustomer.state_code,
+      };
     }
-    const business = await this.getBusiness(actorId);
+    const registered =
+      business.gstRegistrationType === "REGULAR" ||
+      business.gstRegistrationType === "COMPOSITION";
+    if (business.taxEnabled && business.gstRegistrationType !== "REGULAR")
+      throw new AppError(
+        "VALIDATION",
+        "GST sales calculations require a configured regular GST registration.",
+      );
+    if (business.gstRegistrationType === "REGULAR" && !business.taxEnabled)
+      throw new AppError(
+        "VALIDATION",
+        "Enable GST calculation before issuing documents for a regular GST registration.",
+      );
+    if (registered) {
+      if (
+        !hasValidGstinStructure(business.taxRegistrationId ?? "") ||
+        !/^\d{2}$/.test(business.gstStateCode) ||
+        !business.gstRegisteredAddress.trim()
+      )
+        throw new AppError(
+          "VALIDATION",
+          "Complete the business GSTIN, state and registered address before issuing GST documents.",
+        );
+      if (!/^\d{2}$/.test(input.placeOfSupplyStateCode ?? ""))
+        throw new AppError(
+          "VALIDATION",
+          "Enter the actual two-digit place-of-supply state code for this sale.",
+          "placeOfSupplyStateCode",
+        );
+    }
+    const placeOfSupplyStateCode = input.placeOfSupplyStateCode ?? "";
     const prepared: Array<{
       id: string;
       product: ProductRecord;
@@ -2990,8 +3901,14 @@ export class SmartBizApplication {
       unitPriceMinor: number;
       discountMinor: number;
       taxRate: number;
+      cessRate: number;
       subtotalMinor: number;
+      taxableValueMinor: number;
       taxMinor: number;
+      cgstMinor: number;
+      sgstMinor: number;
+      igstMinor: number;
+      cessMinor: number;
       totalMinor: number;
     }> = [];
     for (const requested of input.lines) {
@@ -3028,14 +3945,24 @@ export class SmartBizApplication {
           "A line discount cannot exceed its subtotal.",
         );
       let taxRate = 0;
-      if (business.taxEnabled) {
+      let cessRate = 0;
+      if (business.taxEnabled && product.gstSupplyType === "TAXABLE") {
         if (!product.taxCategory.trim())
           throw new AppError(
             "VALIDATION",
             `Set a tax category for ${product.name} before billing with tax enabled.`,
           );
-        const rates = await this.database.query<{ rate_basis_points: number }>(
-          `SELECT rate_basis_points FROM tax_rates
+        if (!product.hsnSacCode.trim())
+          throw new AppError(
+            "VALIDATION",
+            `Set an HSN/SAC code for ${product.name} before billing.`,
+          );
+        const rates = await this.database.query<{
+          rate_basis_points: number;
+          cess_rate_basis_points: number;
+          source_reference: string;
+        }>(
+          `SELECT rate_basis_points,cess_rate_basis_points,source_reference FROM tax_rates
            WHERE business_id = $1 AND category_code = $2 AND effective_at <= $3
            ORDER BY effective_at DESC, created_at DESC LIMIT 1`,
           [
@@ -3049,10 +3976,34 @@ export class SmartBizApplication {
             "VALIDATION",
             `Configure an effective tax rate for ${product.taxCategory} before billing.`,
           );
+        if (!rates[0].source_reference.trim())
+          throw new AppError(
+            "VALIDATION",
+            `Add an authoritative source reference to the ${product.taxCategory} rate before GST billing.`,
+          );
         taxRate = rates[0].rate_basis_points;
+        cessRate = rates[0].cess_rate_basis_points;
       }
-      const taxableMinor = subtotalMinor - discountMinor;
-      const taxMinor = roundedProduct(taxableMinor, taxRate, 10000);
+      const gstLine = business.taxEnabled
+        ? calculateGstLine({
+            amountMinor: subtotalMinor,
+            discountMinor,
+            supplyType: product.gstSupplyType,
+            pricingMode: product.gstPricingMode,
+            gstRateBasisPoints: taxRate,
+            cessRateBasisPoints: cessRate,
+            supplierStateCode: business.gstStateCode,
+            placeOfSupplyStateCode,
+          })
+        : {
+            taxableValueMinor: subtotalMinor - discountMinor,
+            totalTaxMinor: 0,
+            cgstMinor: 0,
+            sgstMinor: 0,
+            igstMinor: 0,
+            cessMinor: 0,
+            totalMinor: subtotalMinor - discountMinor,
+          };
       prepared.push({
         id: this.runtime.createId(),
         product,
@@ -3060,9 +4011,15 @@ export class SmartBizApplication {
         unitPriceMinor: product.sellingPriceMinor,
         discountMinor,
         taxRate,
+        cessRate,
         subtotalMinor,
-        taxMinor,
-        totalMinor: taxableMinor + taxMinor,
+        taxableValueMinor: gstLine.taxableValueMinor,
+        taxMinor: gstLine.totalTaxMinor,
+        cgstMinor: gstLine.cgstMinor,
+        sgstMinor: gstLine.sgstMinor,
+        igstMinor: gstLine.igstMinor,
+        cessMinor: gstLine.cessMinor,
+        totalMinor: gstLine.totalMinor,
       });
     }
     const subtotalMinor = prepared.reduce(
@@ -3084,7 +4041,64 @@ export class SmartBizApplication {
     }
     const id = this.runtime.createId();
     const now = this.runtime.now();
-    const invoiceNumber = `${business.invoicePrefix}-${now.slice(0, 10).replaceAll("-", "")}-${id}`;
+    const hasTaxable = prepared.some(
+      (line) => line.product.gstSupplyType === "TAXABLE",
+    );
+    const hasExemptOrNil = prepared.some((line) =>
+      ["EXEMPT", "NIL_RATED"].includes(line.product.gstSupplyType),
+    );
+    const hasNonGst = prepared.some(
+      (line) => line.product.gstSupplyType === "NON_GST",
+    );
+    let documentType: InvoiceRecord["documentType"] = "RETAIL_RECEIPT";
+    if (business.gstRegistrationType === "COMPOSITION") {
+      documentType = "BILL_OF_SUPPLY";
+    } else if (business.gstRegistrationType === "REGULAR") {
+      if (hasTaxable && (hasExemptOrNil || hasNonGst)) {
+        if (hasNonGst || customer.gstin)
+          throw new AppError(
+            "VALIDATION",
+            "Split taxable and non-GST or registered-recipient supplies into separate documents.",
+          );
+        documentType = "INVOICE_CUM_BILL_OF_SUPPLY";
+      } else if (hasTaxable) {
+        documentType = "TAX_INVOICE";
+      } else {
+        documentType = "BILL_OF_SUPPLY";
+      }
+    }
+    let financialYear = "";
+    let invoiceNumber = `${business.invoicePrefix}-${now.slice(0, 10).replaceAll("-", "")}-${id}`;
+    if (registered) {
+      financialYear = financialYearLabel(
+        now,
+        business.timezone,
+        business.gstFinancialYearStartMonth,
+      );
+      const sequenceRows = await this.database.query<{
+        last_sequence: number;
+      }>(
+        `INSERT INTO gst_invoice_sequences(business_id,financial_year,last_sequence)
+         VALUES($1,$2,1)
+         ON CONFLICT(business_id,financial_year)
+         DO UPDATE SET last_sequence=last_sequence+1
+         RETURNING last_sequence`,
+        [business.id, financialYear],
+      );
+      const sequence = sequenceRows[0]?.last_sequence;
+      if (!sequence || !Number.isSafeInteger(sequence))
+        throw new AppError(
+          "PERSISTENCE",
+          "GST invoice sequence could not be allocated.",
+        );
+      const yearMarker = `${financialYear.slice(2, 4)}${financialYear.slice(5, 7)}`;
+      invoiceNumber = `${business.gstInvoicePrefix}${yearMarker}/${sequence.toString(36).toUpperCase().padStart(6, "0")}`;
+      if (invoiceNumber.length > 16)
+        throw new AppError(
+          "CONFLICT",
+          "GST invoice series reached the 16-character document number limit.",
+        );
+    }
     const draftLines = JSON.stringify(
       prepared.map((line) => ({
         id: line.id,
@@ -3098,8 +4112,17 @@ export class SmartBizApplication {
         unitPriceMinor: line.unitPriceMinor,
         discountMinor: line.discountMinor,
         taxRate: line.taxRate,
+        hsnSacCode: line.product.hsnSacCode,
+        gstSupplyType: line.product.gstSupplyType,
+        gstPricingMode: line.product.gstPricingMode,
         subtotalMinor: line.subtotalMinor,
+        gstTaxableValueMinor: line.taxableValueMinor,
         taxMinor: line.taxMinor,
+        cgstMinor: line.cgstMinor,
+        sgstMinor: line.sgstMinor,
+        igstMinor: line.igstMinor,
+        cessRateBasisPoints: line.cessRate,
+        cessMinor: line.cessMinor,
         totalMinor: line.totalMinor,
       })),
     );
@@ -3108,8 +4131,13 @@ export class SmartBizApplication {
         `INSERT INTO invoices (
           id, business_id, customer_id, invoice_number, status, subtotal_minor,
           discount_minor, tax_minor, total_minor, idempotency_key, request_fingerprint,
-          draft_lines_json, actor_user_id, created_at
-        ) VALUES ($1, $2, $3, $4, 'DRAFT', $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          draft_lines_json, actor_user_id, created_at,gst_document_type,
+          customer_gstin_snapshot,customer_name_snapshot,customer_address_snapshot,
+          customer_state_code_snapshot,supplier_gstin_snapshot,supplier_legal_name_snapshot,
+          supplier_trade_name_snapshot,supplier_address_snapshot,supplier_state_code_snapshot,
+          place_of_supply_state_code,reverse_charge,financial_year_snapshot
+        ) VALUES ($1,$2,$3,$4,'DRAFT',$5,$6,$7,$8,$9,$10,$11,$12,$13,
+          $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,0,$25)`,
         [
           id,
           actor.businessId,
@@ -3124,6 +4152,18 @@ export class SmartBizApplication {
           draftLines,
           actor.id,
           now,
+          documentType,
+          customer.gstin,
+          customer.name,
+          customer.address,
+          customer.stateCode,
+          business.taxRegistrationId ?? "",
+          business.legalName,
+          business.gstTradeName,
+          business.gstRegisteredAddress || business.address,
+          business.gstStateCode,
+          placeOfSupplyStateCode,
+          financialYear,
         ],
       );
     } catch (error) {
@@ -3613,30 +4653,58 @@ export class SmartBizApplication {
     const invoice = await this.getInvoice(actorId, invoiceId);
     if (invoice.status !== "POSTED")
       throw new AppError("CONFLICT", "Only a posted invoice can be returned.");
-    const returnLines = input.lines.map((line) => {
-      const source = invoice.lines.find(
-        (candidate) => candidate.id === line.invoiceLineId,
-      );
-      if (!source)
-        throw new AppError(
-          "NOT_FOUND",
-          "Returned item is not on this invoice.",
+    const returnLines = await Promise.all(
+      input.lines.map(async (line) => {
+        const source = invoice.lines.find(
+          (candidate) => candidate.id === line.invoiceLineId,
         );
-      const quantityScaled = parseQuantityToScaledInteger(
-        line.quantity,
-        source.unitPrecision,
-      );
-      if (quantityScaled <= 0)
-        throw new AppError(
-          "VALIDATION",
-          "Return quantity must be greater than zero.",
+        if (!source)
+          throw new AppError(
+            "NOT_FOUND",
+            "Returned item is not on this invoice.",
+          );
+        const quantityScaled = parseQuantityToScaledInteger(
+          line.quantity,
+          source.unitPrecision,
         );
-      return {
-        invoiceLineId: line.invoiceLineId,
-        quantityScaled,
-        disposition: line.disposition,
-      };
-    });
+        if (quantityScaled <= 0)
+          throw new AppError(
+            "VALIDATION",
+            "Return quantity must be greater than zero.",
+          );
+        const priorReturned = await this.database.query<{
+          quantity_scaled: number;
+        }>(
+          `SELECT coalesce(sum(irl.quantity_scaled),0) AS quantity_scaled
+         FROM invoice_return_lines irl JOIN invoice_returns ir ON ir.id=irl.return_id
+         WHERE ir.invoice_id=$1 AND irl.invoice_line_id=$2`,
+          [invoiceId, line.invoiceLineId],
+        );
+        const priorQty = priorReturned[0]?.quantity_scaled ?? 0;
+        if (priorQty + quantityScaled > source.quantityScaled)
+          throw new AppError(
+            "CONFLICT",
+            "Returned quantity exceeds the invoiced quantity.",
+          );
+        const delta = (amount: number) =>
+          roundedProduct(
+            amount,
+            priorQty + quantityScaled,
+            source.quantityScaled,
+          ) - roundedProduct(amount, priorQty, source.quantityScaled);
+        return {
+          invoiceLineId: line.invoiceLineId,
+          quantityScaled,
+          disposition: line.disposition,
+          gstTaxReversalMinor: delta(source.taxMinor),
+          cgstReversalMinor: delta(source.cgstMinor),
+          sgstReversalMinor: delta(source.sgstMinor),
+          igstReversalMinor: delta(source.igstMinor),
+          cessReversalMinor: delta(source.cessMinor),
+          taxableReversalMinor: delta(source.taxableValueMinor),
+        };
+      }),
+    );
     if (
       new Set(returnLines.map((line) => line.invoiceLineId)).size !==
       returnLines.length
@@ -3650,6 +4718,26 @@ export class SmartBizApplication {
       (await this.getBusiness(actorId)).currencyFractionDigits,
     );
     const linesJson = JSON.stringify(returnLines);
+    const sameReturnLines = (storedJson: string) => {
+      try {
+        const stored = JSON.parse(storedJson) as Array<{
+          invoiceLineId: string;
+          quantityScaled: number;
+          disposition: string;
+        }>;
+        return (
+          stored.length === returnLines.length &&
+          returnLines.every(
+            (line, index) =>
+              stored[index]?.invoiceLineId === line.invoiceLineId &&
+              stored[index]?.quantityScaled === line.quantityScaled &&
+              stored[index]?.disposition === line.disposition,
+          )
+        );
+      } catch {
+        return false;
+      }
+    };
     const prior = await this.database.query<{
       invoice_id: string;
       reason: string;
@@ -3664,7 +4752,7 @@ export class SmartBizApplication {
         prior[0].invoice_id !== invoiceId ||
         prior[0].reason !== input.reason ||
         prior[0].refund_minor !== refundMinor ||
-        prior[0].lines_json !== linesJson
+        !sameReturnLines(prior[0].lines_json)
       )
         throw new AppError(
           "CONFLICT",
@@ -3732,7 +4820,7 @@ export class SmartBizApplication {
             duplicate[0].invoice_id !== invoiceId ||
             duplicate[0].reason !== input.reason ||
             duplicate[0].refund_minor !== refundMinor ||
-            duplicate[0].lines_json !== linesJson
+            !sameReturnLines(duplicate[0].lines_json)
           )
             throw new AppError(
               "CONFLICT",
@@ -3749,10 +4837,14 @@ export class SmartBizApplication {
 
   private invoiceSelect(): string {
     return `SELECT i.id, i.invoice_number, i.customer_id,
-      coalesce(c.name, 'Walk-in') AS customer_name, i.status,
+      coalesce(nullif(i.customer_name_snapshot,''),c.name, 'Walk-in') AS customer_name, i.status,
       i.subtotal_minor, i.discount_minor, i.tax_minor, i.total_minor,
       coalesce((SELECT sum(p.amount_minor) FROM payments p WHERE p.invoice_id = i.id), 0) AS paid_minor,
-      i.created_at, i.posted_at, i.cancelled_at, i.cancellation_reason
+      i.created_at, i.posted_at, i.cancelled_at, i.cancellation_reason,
+      i.gst_document_type,i.customer_gstin_snapshot,i.customer_address_snapshot,
+      i.customer_state_code_snapshot,i.supplier_gstin_snapshot,i.supplier_legal_name_snapshot,
+      i.supplier_trade_name_snapshot,i.supplier_address_snapshot,i.supplier_state_code_snapshot,
+      i.place_of_supply_state_code,i.reverse_charge,i.financial_year_snapshot
       FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id`;
   }
 
@@ -3772,6 +4864,15 @@ export class SmartBizApplication {
       unit_price_minor: number;
       discount_minor: number;
       tax_rate_basis_points: number;
+      hsn_sac_snapshot: string;
+      gst_supply_type_snapshot: ProductRecord["gstSupplyType"];
+      gst_pricing_mode_snapshot: ProductRecord["gstPricingMode"];
+      gst_taxable_value_minor: number;
+      cgst_minor: number;
+      sgst_minor: number;
+      igst_minor: number;
+      cess_rate_basis_points: number;
+      cess_minor: number;
       line_subtotal_minor: number;
       tax_minor: number;
       line_total_minor: number;
@@ -3779,6 +4880,8 @@ export class SmartBizApplication {
       `SELECT id, product_id, product_name_snapshot, sku_snapshot, barcode_snapshot,
         unit_name_snapshot, unit_precision, quantity_scaled, unit_price_minor,
         discount_minor, tax_rate_basis_points, line_subtotal_minor, tax_minor, line_total_minor
+        ,hsn_sac_snapshot,gst_supply_type_snapshot,gst_pricing_mode_snapshot,gst_taxable_value_minor,
+        cgst_minor,sgst_minor,igst_minor,cess_rate_basis_points,cess_minor
        FROM invoice_lines WHERE invoice_id = $1 ORDER BY rowid`,
       [row.id],
     );
@@ -3809,6 +4912,15 @@ export class SmartBizApplication {
         unitPriceMinor: line.unit_price_minor,
         discountMinor: line.discount_minor,
         taxRateBasisPoints: line.tax_rate_basis_points,
+        hsnSacCode: line.hsn_sac_snapshot,
+        gstSupplyType: line.gst_supply_type_snapshot,
+        gstPricingMode: line.gst_pricing_mode_snapshot,
+        taxableValueMinor: line.gst_taxable_value_minor,
+        cgstMinor: line.cgst_minor,
+        sgstMinor: line.sgst_minor,
+        igstMinor: line.igst_minor,
+        cessRateBasisPoints: line.cess_rate_basis_points,
+        cessMinor: line.cess_minor,
         subtotalMinor: line.line_subtotal_minor,
         taxMinor: line.tax_minor,
         totalMinor: line.line_total_minor,
@@ -3898,7 +5010,8 @@ export class SmartBizApplication {
     productId: string,
   ): Promise<ProductRecord | undefined> {
     const rows = await this.database.query<ProductRow>(
-      `SELECT p.id, p.business_id, p.name, p.sku, p.description, p.tax_category, p.category_id,
+      `SELECT p.id, p.business_id, p.name, p.sku, p.description, p.tax_category,
+          p.hsn_sac_code,p.gst_supply_type,p.gst_pricing_mode,p.category_id,
           p.category_name_snapshot, p.unit_id, p.unit_name_snapshot, p.unit_precision_snapshot,
           p.purchase_price_minor, p.selling_price_minor, p.reorder_threshold_scaled, p.is_active,
           p.archived_at, p.version,

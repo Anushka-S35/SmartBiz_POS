@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasValidGstinStructure } from "./gst";
 
 const optionalEmail = z
   .string()
@@ -52,17 +53,84 @@ export const businessProfileSchema = z
       }, "Choose a valid timezone."),
     invoicePrefix: z.string().trim().min(1).max(16),
     taxEnabled: z.boolean(),
-    taxRegistrationId: z.string().trim().max(64),
+    taxRegistrationId: z
+      .string()
+      .trim()
+      .max(15)
+      .transform((value) => value.toUpperCase()),
+    gstRegistrationType: z.enum([
+      "NOT_CONFIGURED",
+      "REGULAR",
+      "COMPOSITION",
+      "UNREGISTERED",
+    ]),
+    gstTradeName: z.string().trim().max(120),
+    gstStateCode: z
+      .string()
+      .trim()
+      .regex(/^(?:|\d{2})$/),
+    gstRegisteredAddress: z.string().trim().max(500),
+    gstFinancialYearStartMonth: z.number().int().min(1).max(12),
+    gstInvoicePrefix: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9/-]{1,4}$/),
+    gstInvoiceFooter: z.string().trim().max(500),
     allowMultipleBarcodes: z.boolean(),
   })
   .superRefine((profile, context) => {
-    if (profile.taxEnabled && profile.taxRegistrationId.length === 0) {
+    const requiresGstin =
+      profile.gstRegistrationType === "REGULAR" ||
+      profile.gstRegistrationType === "COMPOSITION";
+    if (requiresGstin && !hasValidGstinStructure(profile.taxRegistrationId)) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["taxRegistrationId"],
-        message: "A tax registration ID is required when tax mode is enabled.",
+        message:
+          "Enter a structurally valid GSTIN for the selected registration type.",
       });
     }
+    if (requiresGstin && !/^\d{2}$/.test(profile.gstStateCode))
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["gstStateCode"],
+        message: "Enter the two-digit state code for this GST registration.",
+      });
+    if (requiresGstin && profile.gstRegisteredAddress.length === 0)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["gstRegisteredAddress"],
+        message: "Enter the address recorded for this GST registration.",
+      });
+    if (profile.gstRegistrationType === "UNREGISTERED") {
+      if (profile.taxEnabled)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["taxEnabled"],
+          message:
+            "Tax calculation cannot be enabled for an unregistered business.",
+        });
+      if (profile.taxRegistrationId)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["taxRegistrationId"],
+          message: "Clear the GSTIN when the business is unregistered.",
+        });
+    }
+    if (profile.taxEnabled && profile.gstRegistrationType !== "REGULAR")
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["taxEnabled"],
+        message:
+          "This POS applies configured GST rates only for regular registrations.",
+      });
+    if (profile.taxEnabled && profile.gstRegistrationType === "NOT_CONFIGURED")
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["gstRegistrationType"],
+        message:
+          "Configure the GST registration type before enabling tax calculation.",
+      });
   });
 
 export const ownerSetupSchema = z.object({
@@ -90,6 +158,19 @@ export const productSchema = z.object({
   sku: z.string().trim().min(1).max(64),
   description: z.string().max(2000),
   taxCategory: z.string().trim().max(64),
+  hsnSacCode: z
+    .string()
+    .trim()
+    .max(8)
+    .refine(
+      (value) => value === "" || /^(?:\d{4}|\d{6}|\d{8})$/.test(value),
+      "Enter a 4, 6, or 8 digit HSN/SAC code.",
+    )
+    .optional(),
+  gstSupplyType: z
+    .enum(["TAXABLE", "EXEMPT", "NIL_RATED", "NON_GST"])
+    .optional(),
+  gstPricingMode: z.enum(["INCLUSIVE", "EXCLUSIVE"]).optional(),
   categoryId: z.string().nullable(),
   unitId: z.string().min(1),
   purchasePrice: z.string().trim(),
@@ -131,24 +212,82 @@ export const supplierSchema = z.object({
 export const purchaseSchema = z.object({
   supplierId: z.string().min(1),
   referenceNumber: z.string().trim().min(1).max(80),
+  supplierInvoiceNumber: z.string().trim().max(80).optional(),
+  supplierInvoiceDate: z.string().trim().max(32).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
+  reverseCharge: z.boolean().optional(),
   lines: z
     .array(
       z.object({
         productId: z.string().min(1),
         quantity: z.string().trim().min(1).max(32),
         unitCost: z.string().trim().max(32),
+        hsnSacCode: z.string().trim().max(8).optional(),
+        gstSupplyType: z
+          .enum(["TAXABLE", "EXEMPT", "NIL_RATED", "NON_GST"])
+          .optional(),
+        gstPricingMode: z.enum(["INCLUSIVE", "EXCLUSIVE"]).optional(),
+        gstRateBasisPoints: z
+          .number()
+          .int()
+          .min(0)
+          .max(1000000)
+          .optional(),
+        cessRateBasisPoints: z
+          .number()
+          .int()
+          .min(0)
+          .max(1000000)
+          .optional(),
+        discountMinor: z
+          .number()
+          .int()
+          .min(0)
+          .optional(),
       }),
     )
     .min(1)
     .max(200),
 });
 
+export const purchaseItcAdjustmentSchema = z.object({
+  purchaseId: z.string().min(1),
+  purchaseLineId: z.string().min(1),
+  adjustmentType: z.enum(["CLAIM", "REVERSAL", "RECLAIM"]),
+  cgstMinor: z.number().int().min(0),
+  sgstMinor: z.number().int().min(0),
+  igstMinor: z.number().int().min(0),
+  cessMinor: z.number().int().min(0),
+  reason: z.string().trim().min(1).max(240),
+  idempotencyKey: z.string().trim().min(8).max(128),
+});
+
+export const gstRegisterSchema = z.object({
+  from: z.string().datetime(),
+  to: z.string().datetime(),
+  scope: z.enum(["SALES", "PURCHASES"]),
+});
+
+export type PurchaseInput = z.infer<typeof purchaseSchema>;
+export type PurchaseItcAdjustmentInput = z.infer<
+  typeof purchaseItcAdjustmentSchema
+>;
+export type GstRegisterInput = z.infer<typeof gstRegisterSchema>;
+
 export const customerSchema = z.object({
   name: z.string().trim().min(1).max(120),
   phone: optionalContactPhone,
   email: optionalContactEmail,
   address: z.string().trim().max(500),
+  gstin: z.string().trim().max(15).transform((value) => value.toUpperCase()).optional(),
+  stateCode: z.string().trim().regex(/^(?:|\d{2})$/).optional(),
+}).superRefine((customer, context) => {
+  if (customer.gstin && !hasValidGstinStructure(customer.gstin))
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["gstin"],
+      message: "Enter a structurally valid GSTIN. GSTN status is not checked.",
+    });
 });
 
 export const stockMovementSchema = z.object({
@@ -170,12 +309,15 @@ export const stockMovementSchema = z.object({
 export const taxRateSchema = z.object({
   categoryCode: z.string().trim().min(1).max(64),
   rateBasisPoints: z.number().int().min(0).max(10000),
+  cessRateBasisPoints: z.number().int().min(0).max(1000000).default(0),
   effectiveAt: z.string().datetime(),
+  sourceReference: z.string().trim().min(1).max(240),
   reason: z.string().trim().min(1).max(240),
 });
 
 export const invoiceDraftSchema = z.object({
   customerId: z.string().nullable(),
+  placeOfSupplyStateCode: z.string().trim().regex(/^(?:|\d{2})$/).optional(),
   idempotencyKey: z.string().trim().min(8).max(128),
   lines: z
     .array(
@@ -227,7 +369,6 @@ export type PaymentInput = z.infer<typeof paymentSchema>;
 export type InvoiceReturnInput = z.infer<typeof invoiceReturnSchema>;
 
 export type SupplierInput = z.infer<typeof supplierSchema>;
-export type PurchaseInput = z.infer<typeof purchaseSchema>;
 
 export const salesReportSchema = z.object({
   from: z.string().datetime(),

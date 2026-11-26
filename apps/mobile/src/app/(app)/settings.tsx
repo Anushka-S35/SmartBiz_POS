@@ -31,6 +31,13 @@ function toInput(profile: BusinessProfile): BusinessProfileInput {
     invoicePrefix: profile.invoicePrefix,
     taxEnabled: profile.taxEnabled,
     taxRegistrationId: profile.taxRegistrationId ?? "",
+    gstRegistrationType: profile.gstRegistrationType,
+    gstTradeName: profile.gstTradeName,
+    gstStateCode: profile.gstStateCode,
+    gstRegisteredAddress: profile.gstRegisteredAddress,
+    gstFinancialYearStartMonth: profile.gstFinancialYearStartMonth,
+    gstInvoicePrefix: profile.gstInvoicePrefix,
+    gstInvoiceFooter: profile.gstInvoiceFooter,
     allowMultipleBarcodes: profile.allowMultipleBarcodes,
   };
 }

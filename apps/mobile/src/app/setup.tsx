@@ -26,6 +26,13 @@ const initialProfile: BusinessProfileInput = {
   invoicePrefix: "SB",
   taxEnabled: false,
   taxRegistrationId: "",
+  gstRegistrationType: "NOT_CONFIGURED",
+  gstTradeName: "",
+  gstStateCode: "",
+  gstRegisteredAddress: "",
+  gstFinancialYearStartMonth: 4,
+  gstInvoicePrefix: "GST",
+  gstInvoiceFooter: "",
   allowMultipleBarcodes: false,
 };
 

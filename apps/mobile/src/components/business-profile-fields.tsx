@@ -1,7 +1,7 @@
 import React from "react";
 import { Switch, Text, View } from "react-native";
 import type { BusinessProfileInput, TranslationKey } from "@smartbiz/core";
-import { Field } from "./ui";
+import { Choice, Field } from "./ui";
 import { colors, spacing } from "../theme";
 
 export function BusinessProfileFields({
@@ -75,19 +75,96 @@ export function BusinessProfileFields({
         onChangeText={(text) => update("invoicePrefix", text)}
         autoCapitalize="characters"
       />
-      <ToggleRow
-        label={`${label("taxMode")}: ${label(value.taxEnabled ? "taxEnabled" : "taxDisabled")}`}
-        value={value.taxEnabled}
-        onValueChange={(enabled) => update("taxEnabled", enabled)}
+      <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "700" }}>
+        {label("gstConfiguration")}
+      </Text>
+      <Text style={{ color: colors.muted, fontSize: 13 }}>
+        {label("gstConfigurationHelp")}
+      </Text>
+      <Choice
+        selected={value.gstRegistrationType}
+        onSelect={(selected) => {
+          if (
+            selected === "NOT_CONFIGURED" ||
+            selected === "REGULAR" ||
+            selected === "COMPOSITION" ||
+            selected === "UNREGISTERED"
+          ) {
+            onChange({
+              ...value,
+              gstRegistrationType: selected,
+              taxEnabled: selected === "REGULAR" ? value.taxEnabled : false,
+              taxRegistrationId:
+                selected === "UNREGISTERED" ? "" : value.taxRegistrationId,
+            });
+          }
+        }}
+        options={[
+          { value: "NOT_CONFIGURED", label: label("gstNotConfigured") },
+          { value: "REGULAR", label: label("gstRegular") },
+          { value: "COMPOSITION", label: label("gstComposition") },
+          { value: "UNREGISTERED", label: label("gstUnregistered") },
+        ]}
       />
-      {value.taxEnabled ? (
-        <Field
-          label={label("taxRegistrationId")}
-          value={value.taxRegistrationId}
-          onChangeText={(text) => update("taxRegistrationId", text)}
-          autoCapitalize="characters"
+      {value.gstRegistrationType === "REGULAR" ||
+      value.gstRegistrationType === "COMPOSITION" ? (
+        <>
+          <Field
+            label={label("gstin")}
+            value={value.taxRegistrationId}
+            onChangeText={(text) => update("taxRegistrationId", text)}
+            autoCapitalize="characters"
+          />
+          <Field
+            label={label("gstTradeName")}
+            value={value.gstTradeName}
+            onChangeText={(text) => update("gstTradeName", text)}
+          />
+          <Field
+            label={label("gstStateCode")}
+            value={value.gstStateCode}
+            onChangeText={(text) =>
+              update("gstStateCode", text.replace(/\D/g, "").slice(0, 2))
+            }
+            keyboardType="number-pad"
+          />
+          <Field
+            label={label("gstRegisteredAddress")}
+            value={value.gstRegisteredAddress}
+            onChangeText={(text) => update("gstRegisteredAddress", text)}
+            multiline
+          />
+        </>
+      ) : null}
+      {value.gstRegistrationType === "REGULAR" ? (
+        <ToggleRow
+          label={`${label("taxMode")}: ${label(value.taxEnabled ? "taxEnabled" : "taxDisabled")}`}
+          value={value.taxEnabled}
+          onValueChange={(enabled) => update("taxEnabled", enabled)}
         />
       ) : null}
+      <Field
+        label={label("gstFinancialYearStartMonth")}
+        value={String(value.gstFinancialYearStartMonth)}
+        onChangeText={(text) => {
+          const month = Number(text.replace(/\D/g, "").slice(0, 2));
+          if (text === "" || (month >= 1 && month <= 12))
+            update("gstFinancialYearStartMonth", month || 4);
+        }}
+        keyboardType="number-pad"
+      />
+      <Field
+        label={label("gstInvoicePrefix")}
+        value={value.gstInvoicePrefix}
+        onChangeText={(text) => update("gstInvoicePrefix", text.toUpperCase())}
+        autoCapitalize="characters"
+      />
+      <Field
+        label={label("gstInvoiceFooter")}
+        value={value.gstInvoiceFooter}
+        onChangeText={(text) => update("gstInvoiceFooter", text)}
+        multiline
+      />
       <ToggleRow
         label={label("multipleBarcodes")}
         value={value.allowMultipleBarcodes}

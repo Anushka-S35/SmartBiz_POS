@@ -78,13 +78,24 @@ export function AppProvider({
       case "PERSISTENCE":
         return "errorPersistence";
     }
+    return "errorUnexpected";
   }, []);
+
+  const DATABASE_OPEN_TIMEOUT_MS = 30_000;
 
   const reloadStartup = useCallback(async () => {
     setStatus("loading");
     setStartupError(null);
     try {
-      const database = await openApplicationDatabase();
+      const database = await Promise.race([
+        openApplicationDatabase(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Database open timeout")),
+            DATABASE_OPEN_TIMEOUT_MS,
+          ),
+        ),
+      ]);
       const application = new SmartBizApplication(
         database,
         createRuntime(Crypto.randomUUID, Crypto.getRandomBytes),

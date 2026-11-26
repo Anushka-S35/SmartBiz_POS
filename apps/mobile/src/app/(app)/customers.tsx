@@ -6,6 +6,7 @@ import {
   type CustomerRecord,
   type CustomerSalesSummary,
   type InvoiceRecord,
+  translate,
 } from "@smartbiz/core";
 import {
   Body,
@@ -18,10 +19,18 @@ import {
 } from "../../components/ui";
 import { useApp } from "../../context/app-context";
 
-const emptyCustomer = { name: "", phone: "", email: "", address: "" };
+const emptyCustomer = {
+  name: "",
+  phone: "",
+  email: "",
+  address: "",
+  gstin: "",
+  stateCode: "",
+};
 
 export default function CustomersScreen(): React.JSX.Element {
   const { app, user, locale, errorText } = useApp();
+  const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [history, setHistory] = useState<InvoiceRecord[]>([]);
   const [summary, setSummary] = useState<CustomerSalesSummary | null>(null);
@@ -63,6 +72,8 @@ export default function CustomersScreen(): React.JSX.Element {
       phone: customer.phone,
       email: customer.email,
       address: customer.address,
+      gstin: customer.gstin,
+      stateCode: customer.stateCode,
     });
     try {
       const [purchaseHistory, salesSummary] = await Promise.all([
@@ -147,6 +158,25 @@ export default function CustomersScreen(): React.JSX.Element {
               setForm((current) => ({ ...current, address }))
             }
             multiline
+          />
+          <Field
+            label={t("gstin")}
+            value={form.gstin}
+            onChangeText={(gstin) =>
+              setForm((current) => ({ ...current, gstin: gstin.toUpperCase() }))
+            }
+            autoCapitalize="characters"
+          />
+          <Field
+            label={t("gstStateCode")}
+            value={form.stateCode}
+            onChangeText={(stateCode) =>
+              setForm((current) => ({
+                ...current,
+                stateCode: stateCode.replace(/\D/g, "").slice(0, 2),
+              }))
+            }
+            keyboardType="number-pad"
           />
           <Button onPress={() => void save()} disabled={!form.name.trim()}>
             {editing ? "Save customer" : "Add customer"}

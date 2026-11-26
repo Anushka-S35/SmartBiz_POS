@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha2";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { AppError } from "./errors";
 
-export const PASSWORD_ITERATIONS = 600_000;
+export const PASSWORD_ITERATIONS = 100_000;
 const PASSWORD_SALT_BYTES = 16;
 const PASSWORD_HASH_BYTES = 32;
 
@@ -34,7 +34,7 @@ export async function hashPassword(
   const derived = await pbkdf2Async(sha256, password, salt, {
     c: PASSWORD_ITERATIONS,
     dkLen: PASSWORD_HASH_BYTES,
-    asyncTick: 100,
+    asyncTick: 2500,
   });
   return {
     hash: bytesToHex(derived),
@@ -68,7 +68,7 @@ export async function verifyPassword(
   const actual = await pbkdf2Async(sha256, password, salt, {
     c: iterations,
     dkLen: PASSWORD_HASH_BYTES,
-    asyncTick: 100,
+    asyncTick: 2500,
   });
   let difference = 0;
   for (let index = 0; index < expected.length; index += 1) {

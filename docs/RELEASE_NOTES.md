@@ -20,7 +20,7 @@ This is a development build, not a production release.
 
 ### Not included
 
-This is still a development checkpoint, not a production release. The new modules have no UI/E2E test coverage or tested-device workflow. Supplier purchase documents, management reports, sync/outbox, encrypted backup, camera/HID scanning, physical printer drivers, cross-device invoice sequencing, complete localization/accessibility, Android/iOS builds, and release signing remain incomplete or unverified. Tax-exclusive category-rate calculation is not a GST compliance implementation. See [known limitations](./KNOWN_LIMITATIONS.md) and the story-level [implementation tracker](./IMPLEMENTATION_TRACKER.md).
+This is still a development checkpoint, not a production release. GST settings, product classification, configured sales tax components, invoice snapshots and GST-labelled PDFs are present, but statutory and practitioner verification is incomplete. Purchase ITC workflows, GST registers/return exports, reverse-charge rules, e-invoice, e-way bill and government filing integrations remain unimplemented. Existing broader UI/E2E and tested-device gaps also remain. See [known limitations](./KNOWN_LIMITATIONS.md), [Indian GST implementation status](./INDIAN_GST_IMPLEMENTATION.md), and the story-level [implementation tracker](./IMPLEMENTATION_TRACKER.md).
 
 ### Verification
 

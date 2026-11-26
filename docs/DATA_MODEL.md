@@ -1,7 +1,7 @@
 # Data model
 
 SQLite schema changes are applied using numbered migrations and `PRAGMA user_version`.
-The current schema is version 2; its second migration adds a unique installation-wide business constraint without changing existing business rows.
+The current application schema is version 7. Migrations 3–7 add customer, stock, invoice, payment, returns, purchasing, FIFO costing and GST fields. Business/product settings and sales invoice snapshots consume the GST fields; purchase tax and ITC fields remain groundwork. See [Indian GST implementation status](./INDIAN_GST_IMPLEMENTATION.md).
 
 ## Current entities
 
@@ -13,6 +13,7 @@ The current schema is version 2; its second migration adds a unique installation
 - `barcode_mappings`: business-scoped code/symbology mapping, product reference, creator and retirement metadata.
 - `barcode_history`: append-only assignment/remap events including actor, reason, previous value and new value.
 - `audit_events`: append-only minimal records for business settings and user/role lifecycle changes.
+- Migration 7 extends business, customer, supplier, product, invoice, invoice-line, purchase and purchase-line records with GST configuration and historical snapshot fields. It adds cess/source fields to effective-dated `tax_rates` and append-only `purchase_itc_adjustments`.
 
 ## Integrity
 
@@ -24,4 +25,4 @@ The current schema is version 2; its second migration adds a unique installation
 - Quantities are decimal strings converted to integer units using the unit's configured precision.
 - Soft-deleted/archived records remain available for historical references.
 
-Invoice, payments, stock movements, multi-store, sync and printer data do not exist in this phase.
+GST snapshots are additive and do not rewrite old invoices. New sales invoices consume GST product/rate data and cancellation/return rows preserve tax reversal values. Purchase tax workflow and GST reporting remain unconnected. Multi-store, sync and printer-job data remain outside the current schema.
