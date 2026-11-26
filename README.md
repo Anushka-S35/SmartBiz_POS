@@ -12,31 +12,107 @@ SmartBiz POS is a local-first retail POS foundation for small businesses. The cu
 
 The application has no cloud service or synchronization backend in this phase. Separate devices therefore have separate local databases. See [Architecture](docs/ARCHITECTURE.md) and [Security](docs/SECURITY.md) for boundaries and limitations.
 
-## Prerequisites
+## Prerequisites (macOS)
 
-- Node.js 24 LTS and npm 10+.
-- Android Studio and an Android SDK for Android builds.
-- Xcode and its command-line tools for iOS builds (macOS only).
-- Rust stable and the platform prerequisites required by Tauri 2 for desktop builds.
+Install these in order before running any project command.
 
-Use Node.js 24 and the committed npm lockfile. On macOS, Android builds require Android Studio and an SDK; iOS builds require the full Xcode installation; desktop builds require Rust/Cargo and Tauri's macOS prerequisites. The development setup guide records the toolchains verified on the current host.
+### A. Node.js 24 LTS (required)
+```sh
+node --version
+# If missing or not v24.x:
+brew install node@24
+# or via nvm:
+nvm install 24 && nvm use 24
+npm --version   # should be 10.x+
+```
 
-## Install and run
+### B. Git (required)
+```sh
+git --version
+# Install if missing: brew install git
+```
+
+### C. Android Studio + Android SDK (required for Android APK builds)
+1. Download and install **Android Studio**: https://developer.android.com/studio
+2. Open Android Studio → **SDK Manager** → install:
+   - Android SDK Platform (API 36)
+   - Android SDK Build-Tools 36.0.0
+   - Android NDK (latest stable)
+   - An emulator (e.g., Pixel 8 API 36) if you don't have a physical device
+3. Add to your shell config (`~/.zshrc` or `~/.bash_profile`):
+   ```sh
+   export ANDROID_HOME="$HOME/Library/Android/sdk"
+   export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+   export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin"
+   ```
+4. Apply: `source ~/.zshrc`
+
+### D. Java 17 (required for Android Gradle Plugin)
+```sh
+brew install openjdk@17
+# Add to shell config:
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version   # should show 17.0.x
+```
+
+### E. Rust + Tauri Prerequisites (desktop builds only)
+Skip if you only need the mobile APK.
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+brew install cmake pkg-config openssl
+cargo --version
+```
+
+### F. Xcode (iOS builds only, macOS)
+Skip if you only need Android.
+```sh
+# Install Xcode from the Mac App Store, then:
+xcode-select --install
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
+
+## Install and Run Dependencies
 
 ```sh
+# Clone the repository
+git clone https://github.com/Anushka-S35/SmartBiz_POS.git
+cd SmartBiz_POS
+
+# Install all workspace dependencies using the committed lockfile
 npm ci
+
+# Verify installation
+npm run typecheck   # should pass with no errors
+npm run lint        # should pass with no warnings
+npm test            # all tests should pass
+```
+
+## Run on macOS
+
+### Mobile app (Expo development server)
+```sh
 npm run start --workspace @smartbiz/mobile
 ```
+Press `a` in the terminal to open on Android emulator/device, or `i` for iOS.
 
-In another terminal:
-
+### Android (emulator or connected device)
 ```sh
 npm run android --workspace @smartbiz/mobile
+```
+Requires Android Studio SDK + an emulator or physical Android device with USB debugging enabled.
+
+### iOS (macOS only)
+```sh
 npm run ios --workspace @smartbiz/mobile
+```
+Requires full Xcode installation.
+
+### Desktop shell (Tauri, macOS only)
+```sh
 PATH="$HOME/.cargo/bin:$PATH" npm run tauri:dev --workspace @smartbiz/desktop
 ```
-
-On macOS, the desktop command launches the native Tauri app. The PATH prefix is only needed if Rust was installed under `~/.cargo/bin` and that directory is not already on PATH. The iOS command requires full Xcode; Android requires an emulator or connected device and an installed Android SDK.
 
 ## Quality checks
 
@@ -49,6 +125,45 @@ npm run build
 ```
 
 `npm run build` exports the shared Expo web client used by the Tauri shell. It does not certify native Android, iOS, or Tauri packaging.
+
+## Build Android Debug APK on macOS
+
+This builds a debug `.apk` that you can install on any Android device or emulator.
+
+### Step-by-step
+```sh
+cd apps/mobile/android
+
+# Set Java 17 and Android SDK paths
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+
+# Build the debug APK
+./gradlew assembleDebug --no-daemon
+```
+
+### Where the APK is created
+```
+/Users/your-username/Documents/SmartBiz_POS/apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Verify the APK
+```sh
+ls -la apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+file apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+unzip -t apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Install on a connected device
+```sh
+adb install apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Clean rebuild (if the APK seems stale)
+```sh
+./gradlew clean assembleDebug --no-daemon
+```
 
 Build the native desktop application and macOS bundles with:
 
